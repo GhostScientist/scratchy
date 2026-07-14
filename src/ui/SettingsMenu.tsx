@@ -1,10 +1,17 @@
 import { useEffect, useRef, useState } from 'react';
 import { GearIcon } from './icons';
+import { PRESETS } from '../recording/presets';
 import type { Handedness } from '../settings/settings';
 
 interface SettingsMenuProps {
   handedness: Handedness;
   onHandedness(handedness: Handedness): void;
+  presetId: string;
+  /** Frozen during an active recording (SPEC §7.1). */
+  presetLocked: boolean;
+  /** null until a device check ran; false disables the 1080p-class presets. */
+  supports1080p: boolean | null;
+  onPreset(id: string): void;
   /** One-line capability summary, null before the first device check. */
   deviceSummary: string | null;
   deviceChecking: boolean;
@@ -61,6 +68,32 @@ export function SettingsMenu(props: SettingsMenuProps) {
               Left-handed
             </button>
           </div>
+          <div className="settings-label" id="settings-preset-label">
+            Recording quality
+          </div>
+          <div className="settings-seg" role="group" aria-labelledby="settings-preset-label">
+            {PRESETS.map((p) => {
+              const gatedOff = p.needsPerformance && props.supports1080p === false;
+              return (
+                <button
+                  key={p.id}
+                  type="button"
+                  className={props.presetId === p.id ? 'active' : ''}
+                  aria-pressed={props.presetId === p.id}
+                  aria-label={`${p.label} preset`}
+                  title={gatedOff ? `${p.description} — needs a faster device` : p.description}
+                  disabled={props.presetLocked || gatedOff}
+                  onClick={() => props.onPreset(p.id)}
+                >
+                  {p.label}
+                </button>
+              );
+            })}
+          </div>
+          <p className="settings-device">
+            {PRESETS.find((p) => p.id === props.presetId)?.description}
+            {props.presetLocked ? ' · locked while recording' : ''}
+          </p>
           <div className="settings-label">This device</div>
           <p className="settings-device">
             {props.deviceSummary ?? 'Not checked yet — runs before your first recording.'}

@@ -38,6 +38,7 @@ import type { AppSettings } from './settings/settings';
 import { ensureDeviceProfile } from './capability/probe';
 import { loadDeviceProfile } from './capability/profile';
 import type { DeviceProfile } from './capability/profile';
+import { presetById, outputCrop } from './recording/presets';
 import { exportViewPng, exportBoardPng, downloadBlob } from './export/png';
 import { clamp } from './lib/geometry';
 import {
@@ -416,8 +417,13 @@ export default function App() {
     [],
   );
 
+  const preset = presetById(settings.presetId);
+  const presetRef = useRef(preset);
+  presetRef.current = preset;
+  const getPreset = useCallback(() => presetRef.current, []);
+
   const getMicStream = useCallback(() => micStreamRef.current, []);
-  const recorder = useRecorder(sources, getMicStream);
+  const recorder = useRecorder(sources, getMicStream, getPreset);
 
   const recorderTake = recorder.take;
   const handleSaveTake = useCallback(async (): Promise<boolean> => {
@@ -466,6 +472,12 @@ export default function App() {
         return;
       }
       setDeviceProfile(result.profile);
+      // A gated preset can outlive a re-probe that says no — drop back.
+      if (presetRef.current.needsPerformance && !result.profile.supports1080p) {
+        presetRef.current = presetById('compat');
+        updateSettings({ presetId: 'compat' });
+        pushToast('Dropped to 720p — this device failed the 1080p performance check.');
+      }
       if (!mic.enabled) {
         pushToast('Recording without microphone — tap the mic to add your voice.');
       }
@@ -495,6 +507,37 @@ export default function App() {
       }
     })();
   }, [pushToast]);
+
+  const handlePreset = useCallback(
+    (id: string) => {
+      const next = presetById(id);
+      if (!next.needsPerformance) {
+        updateSettings({ presetId: next.id });
+        return;
+      }
+      // 1080p-class presets are gated on the performance probe (SPEC §6.5).
+      void (async () => {
+        let profile = deviceProfile;
+        if (!profile) {
+          setProbing(true);
+          const result = await ensureDeviceProfile();
+          setProbing(false);
+          if (!result.ok) {
+            pushToast(result.reason);
+            return;
+          }
+          profile = result.profile;
+          setDeviceProfile(profile);
+        }
+        if (profile.supports1080p) {
+          updateSettings({ presetId: next.id });
+        } else {
+          pushToast('This device failed the 1080p performance check — staying at 720p.');
+        }
+      })();
+    },
+    [deviceProfile, pushToast, updateSettings],
+  );
 
   const deviceSummary = deviceProfile
     ? `Records ${deviceProfile.mimeType.split(';')[0].split('/')[1]?.toUpperCase() ?? 'video'} · ${
@@ -705,6 +748,10 @@ export default function App() {
           <SettingsMenu
             handedness={settings.handedness}
             onHandedness={(handedness) => updateSettings({ handedness })}
+            presetId={preset.id}
+            presetLocked={recordingActive}
+            supports1080p={deviceProfile ? deviceProfile.supports1080p : null}
+            onPreset={handlePreset}
             deviceSummary={deviceSummary}
             deviceChecking={probing}
             onDeviceCheck={handleDeviceCheck}
@@ -755,6 +802,12 @@ export default function App() {
                   setCameraVisible(true);
                 }}
               />
+            )}
+            {preset.id === 'vertical' && (
+              // SPEC §4.6 "a predictable frame": mark the recorded 9:16 crop.
+              <div className="frame-guide" aria-hidden="true">
+                <div className="frame-guide-window" style={{ width: outputCrop(preset).w }} />
+              </div>
             )}
             {!hasInk && recorder.phase === 'idle' && (
               <div className="empty-hint" aria-hidden="true">

@@ -3,8 +3,10 @@ import { drawStroke } from '../lib/strokes';
 import { drawLaserTrail } from '../lib/laser';
 import type { LaserPoint } from '../lib/laser';
 import { coverCrop, cameraClipPath } from '../lib/geometry';
-import { STAGE_WIDTH, STAGE_HEIGHT } from '../types';
+import { BACKING_SCALE } from '../types';
 import type { BackgroundKind, CameraLayout, Stroke, ViewportState } from '../types';
+import { effectiveView, outputCrop } from './presets';
+import type { OutputCrop, RecordingPreset } from './presets';
 
 export interface CompositorSources {
   getBackground(): BackgroundKind;
@@ -20,9 +22,11 @@ export interface CompositorSources {
 }
 
 /**
- * Draws every output frame into a dedicated 1280×720 canvas — the
- * authoritative visual source for the recorded video. Runs its own rAF loop
- * only while a recording (or countdown) is in progress.
+ * Draws every output frame into a dedicated canvas sized by the recording
+ * preset — the authoritative visual source for the recorded video. Non-16:9
+ * presets render the centered stage crop; all world-space drawing reuses the
+ * display renderers through an "effective viewport" (see presets.ts). Runs
+ * its own rAF loop only while a recording (or countdown) is in progress.
  */
 export class Compositor {
   readonly canvas: HTMLCanvasElement;
@@ -30,11 +34,16 @@ export class Compositor {
   private raf = 0;
   private running = false;
   private track: MediaStreamTrack | null = null;
+  private crop: OutputCrop;
 
-  constructor(private sources: CompositorSources) {
+  constructor(
+    private sources: CompositorSources,
+    private preset: RecordingPreset,
+  ) {
     this.canvas = document.createElement('canvas');
-    this.canvas.width = STAGE_WIDTH;
-    this.canvas.height = STAGE_HEIGHT;
+    this.canvas.width = preset.width;
+    this.canvas.height = preset.height;
+    this.crop = outputCrop(preset);
     const ctx = this.canvas.getContext('2d');
     if (!ctx) throw new Error('Canvas 2D is not available');
     this.ctx = ctx;
@@ -72,35 +81,55 @@ export class Compositor {
 
   private draw(): void {
     const ctx = this.ctx;
+    const { width: outW, height: outH } = this.preset;
+    const crop = this.crop;
     const view = this.sources.getViewport();
-    drawBackground(ctx, this.sources.getBackground(), {
-      ...view,
-      outW: STAGE_WIDTH,
-      outH: STAGE_HEIGHT,
-    });
+    const eff = effectiveView(view, this.preset);
+
+    drawBackground(ctx, this.sources.getBackground(), { ...eff, outW, outH });
 
     // The ink cache always holds the current viewport's view at 2×, so a
-    // plain downscaling blit keeps the recording glued to the viewport. It is
+    // source-rect blit of the crop keeps the recording glued to the viewport
+    // (a clean downscale for 1080p, a mild upscale for vertical). It is
     // rebuilt on the engine's rAF, so a frame sampled mid-pan can be one
     // frame stale relative to the active stroke — invisible at 30 fps.
     const ink = this.sources.getInkCanvas();
-    if (ink) ctx.drawImage(ink, 0, 0, STAGE_WIDTH, STAGE_HEIGHT);
+    if (ink) {
+      ctx.drawImage(
+        ink,
+        crop.x * BACKING_SCALE,
+        crop.y * BACKING_SCALE,
+        crop.w * BACKING_SCALE,
+        crop.h * BACKING_SCALE,
+        0,
+        0,
+        outW,
+        outH,
+      );
+    }
 
     const active = this.sources.getActiveStroke();
     if (active) {
       ctx.save();
-      // Compositor canvas is 1× (no BACKING_SCALE): stage px = output px.
-      ctx.setTransform(view.zoom, 0, 0, view.zoom, -view.x * view.zoom, -view.y * view.zoom);
+      ctx.setTransform(eff.zoom, 0, 0, eff.zoom, -eff.x * eff.zoom, -eff.y * eff.zoom);
       drawStroke(ctx, active);
       ctx.restore();
     }
 
     const laser = this.sources.getLaserTrail();
-    if (laser.length > 0) drawLaserTrail(ctx, laser, view, performance.now());
+    if (laser.length > 0) drawLaserTrail(ctx, laser, eff, performance.now());
 
     const video = this.sources.getVideo();
     if (video && video.readyState >= 2 && video.videoWidth > 0) {
-      const layout = this.sources.getCameraLayout();
+      // Camera layout is stage-anchored: map it through the crop.
+      const src = this.sources.getCameraLayout();
+      const layout: CameraLayout = {
+        ...src,
+        x: (src.x - crop.x) * crop.scale,
+        y: (src.y - crop.y) * crop.scale,
+        width: src.width * crop.scale,
+        height: src.height * crop.scale,
+      };
       ctx.save();
       ctx.clip(cameraClipPath(layout));
       const { sx, sy, sw, sh } = coverCrop(

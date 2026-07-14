@@ -382,6 +382,22 @@ button:disabled {
   outline-color: var(--accent);
 }
 
+/* Recorded-crop guide for non-16:9 presets: dims what the video won't show. */
+.frame-guide {
+  position: absolute;
+  inset: 0;
+  z-index: 15;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.frame-guide-window {
+  height: 100%;
+  border-inline: 2px dashed rgba(128, 128, 128, 0.55);
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.22);
+}
+
 .stage-layer {
   position: absolute;
   inset: 0;

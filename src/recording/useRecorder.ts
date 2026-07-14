@@ -3,6 +3,7 @@ import { Compositor } from './Compositor';
 import type { CompositorSources } from './Compositor';
 import { negotiateFormat, extensionFor } from './mime';
 import type { NegotiatedFormat } from './mime';
+import type { RecordingPreset } from './presets';
 import type { Take } from '../types';
 
 export type RecorderPhase = 'idle' | 'countdown' | 'recording' | 'paused' | 'stopping' | 'complete';
@@ -29,6 +30,7 @@ const COUNTDOWN_SECONDS = 3;
 export function useRecorder(
   sources: CompositorSources,
   getMicStream: () => MediaStream | null,
+  getPreset: () => RecordingPreset,
 ): RecorderApi {
   const [phase, setPhase] = useState<RecorderPhase>('idle');
   const [countdownValue, setCountdownValue] = useState(COUNTDOWN_SECONDS);
@@ -40,6 +42,9 @@ export function useRecorder(
   sourcesRef.current = sources;
   const getMicRef = useRef(getMicStream);
   getMicRef.current = getMicStream;
+  const getPresetRef = useRef(getPreset);
+  getPresetRef.current = getPreset;
+  const presetRef = useRef<RecordingPreset | null>(null);
 
   const compositorRef = useRef<Compositor | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
@@ -119,7 +124,8 @@ export function useRecorder(
     try {
       const compositor = compositorRef.current!;
       const format = formatRef.current!;
-      const stream = compositor.captureStream(30);
+      const preset = presetRef.current!;
+      const stream = compositor.captureStream(preset.fps);
       const mic = getMicRef.current();
       // Clone mic tracks so teardown can stop them without killing the
       // mic hook's stream for the next take.
@@ -130,7 +136,7 @@ export function useRecorder(
       try {
         recorder = new MediaRecorder(stream, {
           mimeType: format.mimeType,
-          videoBitsPerSecond: 6_000_000,
+          videoBitsPerSecond: preset.videoBitsPerSecond,
           audioBitsPerSecond: 128_000,
         });
       } catch {
@@ -173,7 +179,12 @@ export function useRecorder(
         return current;
       }
       formatRef.current = format;
-      if (!compositorRef.current) compositorRef.current = new Compositor(sourcesRef.current);
+      // Fresh compositor per take — its canvas is sized by the preset,
+      // which may have changed since the last recording.
+      const preset = getPresetRef.current();
+      presetRef.current = preset;
+      compositorRef.current?.stop();
+      compositorRef.current = new Compositor(sourcesRef.current, preset);
       compositorRef.current.start();
       setCountdownValue(COUNTDOWN_SECONDS);
       let remaining = COUNTDOWN_SECONDS;

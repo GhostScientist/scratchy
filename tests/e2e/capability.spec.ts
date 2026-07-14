@@ -79,7 +79,9 @@ test('the settings menu shows the negotiated format after a device check', async
   await page.waitForSelector('.boards-menu');
 
   await page.getByRole('button', { name: 'Settings' }).click();
-  await expect(page.locator('.settings-device')).toContainText('Not checked yet');
+  await expect(page.locator('.settings-device').last()).toContainText('Not checked yet');
   await page.getByRole('button', { name: 'Run device check' }).click();
-  await expect(page.locator('.settings-device')).toContainText('Records', { timeout: 20_000 });
+  await expect(page.locator('.settings-device').last()).toContainText('Records', {
+    timeout: 20_000,
+  });
 });
