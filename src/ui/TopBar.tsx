@@ -1,7 +1,15 @@
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { RecorderPhase } from '../recording/useRecorder';
-import { CameraIcon, CameraOffIcon, LibraryIcon, MicIcon, MicOffIcon } from './icons';
+import {
+  CameraIcon,
+  CameraOffIcon,
+  LibraryIcon,
+  MicIcon,
+  MicOffIcon,
+  PauseIcon,
+  PlayIcon,
+} from './icons';
 
 export function formatDuration(ms: number): string {
   const totalSeconds = Math.floor(ms / 1000);
@@ -17,6 +25,8 @@ interface TopBarProps {
   boardsSlot?: ReactNode;
   /** PNG export flyout. */
   exportSlot?: ReactNode;
+  /** Device settings flyout (handedness, recording preset). */
+  settingsSlot?: ReactNode;
   /** Opens the saved-takes drawer; absent when takes can't persist. */
   onLibrary?: () => void;
   micEnabled: boolean;
@@ -27,6 +37,11 @@ interface TopBarProps {
   onCamera(): void;
   phase: RecorderPhase;
   elapsedMs: number;
+  /** True while the one-time capability probe runs before recording. */
+  probing?: boolean;
+  /** Absent (undefined) when pause is unsupported/unreliable on this device. */
+  onPause?: () => void;
+  onResume?: () => void;
   onRecord(): void;
   onCancelCountdown(): void;
   onStop(): void;
@@ -35,10 +50,10 @@ interface TopBarProps {
 export function TopBar(props: TopBarProps) {
   const [confirmStop, setConfirmStop] = useState(false);
   const { phase } = props;
-  const recordingActive = phase === 'recording' || phase === 'stopping';
+  const recordingActive = phase === 'recording' || phase === 'paused' || phase === 'stopping';
 
   useEffect(() => {
-    if (phase !== 'recording') setConfirmStop(false);
+    if (phase !== 'recording' && phase !== 'paused') setConfirmStop(false);
   }, [phase]);
 
   const micLabel = !props.micEnabled
@@ -74,6 +89,7 @@ export function TopBar(props: TopBarProps) {
       />
 
       <div className="top-actions">
+        {props.settingsSlot}
         {props.exportSlot}
         {props.onLibrary && (
           <button
@@ -111,9 +127,20 @@ export function TopBar(props: TopBarProps) {
 
         <div className="record-cluster">
           {(phase === 'idle' || phase === 'complete') && (
-            <button type="button" className="record-btn" onClick={props.onRecord}>
-              <span className="rec-dot" aria-hidden="true" />
-              Record
+            <button
+              type="button"
+              className={`record-btn${props.probing ? ' counting' : ''}`}
+              disabled={props.probing}
+              onClick={props.onRecord}
+            >
+              {props.probing ? (
+                'Checking device…'
+              ) : (
+                <>
+                  <span className="rec-dot" aria-hidden="true" />
+                  Record
+                </>
+              )}
             </button>
           )}
           {phase === 'countdown' && (
@@ -123,10 +150,31 @@ export function TopBar(props: TopBarProps) {
           )}
           {recordingActive && (
             <>
-              <span className="rec-live" aria-hidden="true" />
-              <span className="timer" role="timer" aria-label="Recording time">
+              {phase === 'paused' ? (
+                <span className="paused-label">Paused</span>
+              ) : (
+                <span className="rec-live" aria-hidden="true" />
+              )}
+              <span
+                className={`timer${phase === 'paused' ? ' paused' : ''}`}
+                role="timer"
+                aria-label="Recording time"
+              >
                 {formatDuration(props.elapsedMs)}
               </span>
+              {props.onPause && props.onResume && phase !== 'stopping' && (
+                <button
+                  type="button"
+                  className="pause-btn"
+                  aria-label={
+                    phase === 'paused' ? 'Resume recording (Space)' : 'Pause recording (Space)'
+                  }
+                  title={phase === 'paused' ? 'Resume recording (Space)' : 'Pause recording (Space)'}
+                  onClick={phase === 'paused' ? props.onResume : props.onPause}
+                >
+                  {phase === 'paused' ? <PlayIcon /> : <PauseIcon />}
+                </button>
+              )}
               <button
                 type="button"
                 className="stop-btn"
@@ -137,7 +185,7 @@ export function TopBar(props: TopBarProps) {
               >
                 <span className="stop-square" aria-hidden="true" />
               </button>
-              {confirmStop && phase === 'recording' && (
+              {confirmStop && (phase === 'recording' || phase === 'paused') && (
                 <div className="stop-confirm" role="alertdialog" aria-label="End recording?">
                   <span>End recording?</span>
                   <button type="button" className="btn danger small" onClick={props.onStop}>

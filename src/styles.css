@@ -233,6 +233,34 @@ button:disabled {
   min-width: 46px;
 }
 
+.paused-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.timer.paused {
+  color: var(--text-dim);
+}
+
+.pause-btn {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: var(--panel-3);
+  border: 1.5px solid var(--line);
+  color: var(--text);
+  transition: background 150ms var(--ease);
+}
+
+.pause-btn:hover {
+  background: var(--panel-2);
+}
+
 .stop-btn {
   display: grid;
   place-items: center;
@@ -352,6 +380,54 @@ button:disabled {
 
 .stage.is-recording {
   outline-color: var(--accent);
+}
+
+/* Tool cursors for the new element tools. */
+.stage.tool-shape .stage-input {
+  cursor: crosshair;
+}
+
+.stage.tool-text .stage-input {
+  cursor: text;
+}
+
+.stage.tool-select .stage-input {
+  cursor: default;
+}
+
+/* DOM text editor floating over the canvas (rendering stays on canvas). */
+.text-editor {
+  position: absolute;
+  z-index: 16;
+  min-width: 40px;
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  border: 1.5px dashed rgba(110, 168, 255, 0.8);
+  border-radius: 4px;
+  outline: none;
+  resize: none;
+  overflow: hidden;
+  white-space: pre;
+  font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+  font-weight: 500;
+  caret-color: currentColor;
+}
+
+/* Recorded-crop guide for non-16:9 presets: dims what the video won't show. */
+.frame-guide {
+  position: absolute;
+  inset: 0;
+  z-index: 15;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.frame-guide-window {
+  height: 100%;
+  border-inline: 2px dashed rgba(128, 128, 128, 0.55);
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.22);
 }
 
 .stage-layer {
@@ -525,6 +601,50 @@ button:disabled {
   background: var(--panel-3);
 }
 
+/* ---- settings menu ------------------------------------------------------ */
+
+.settings-menu {
+  position: relative;
+}
+
+.settings-flyout {
+  min-width: 230px;
+  gap: 2px;
+}
+
+.settings-label {
+  padding: 6px 12px 3px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.settings-seg {
+  display: flex;
+  gap: 4px;
+}
+
+.settings-seg button {
+  flex: 1;
+  text-align: center;
+  color: var(--text-dim);
+}
+
+.settings-seg button.active {
+  background: var(--panel-3);
+  color: var(--text);
+}
+
+.settings-device {
+  padding: 2px 12px 6px;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--text-dim);
+  max-width: 240px;
+}
+
 /* ---- takes drawer ------------------------------------------------------ */
 
 .takes-drawer {
@@ -614,6 +734,66 @@ button:disabled {
 .takes-storage {
   padding: 10px 18px 14px;
   border-top: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+/* ---- crash-recovery card ------------------------------------------------ */
+
+.recovery-card {
+  position: fixed;
+  top: 74px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 80;
+  min-width: 380px;
+  max-width: 560px;
+  padding: 16px 18px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: var(--shadow);
+  animation: fade 180ms var(--ease);
+}
+
+.recovery-card h3 {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.recovery-sub {
+  margin: 4px 0 10px;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.recovery-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+}
+
+.recovery-row + .recovery-row {
+  border-top: 1px solid var(--line);
+}
+
+.recovery-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.recovery-info strong {
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recovery-info span {
   font-size: 12px;
   color: var(--text-dim);
 }
@@ -755,6 +935,36 @@ button:disabled {
   border: 1.5px solid var(--panel);
 }
 
+/* ---- left-handed layout ------------------------------------------------------ */
+/* SPEC §6.2/§7.2: configurable left or right toolbar placement. The rail,
+   its flyouts, the reserved stage gutter, and the nav aids all mirror. */
+
+.app.hand-left .rail,
+.app.hand-left .rail-handle {
+  left: auto;
+  right: 18px;
+}
+
+.app.hand-left .stage-fit {
+  margin: 14px 96px 22px 22px;
+}
+
+.app.hand-left .flyout {
+  left: auto;
+  right: calc(100% + 14px);
+  animation-name: flyout-in-left;
+}
+
+.app.hand-left .nav-aids {
+  right: auto;
+  left: 18px;
+  align-items: flex-start;
+}
+
+.app.hand-left .rail-collapse svg {
+  transform: scaleX(-1);
+}
+
 /* ---- flyouts ----------------------------------------------------------------- */
 
 .flyout {
@@ -776,7 +986,8 @@ button:disabled {
 
 .swatch-btn,
 .width-btn,
-.bg-btn {
+.bg-btn,
+.shape-btn {
   display: grid;
   place-items: center;
   width: 44px;
@@ -1143,6 +1354,17 @@ button:disabled {
   from {
     opacity: 0;
     transform: translateY(-50%) translateX(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(-50%) translateX(0);
+  }
+}
+
+@keyframes flyout-in-left {
+  from {
+    opacity: 0;
+    transform: translateY(-50%) translateX(6px);
   }
   to {
     opacity: 1;

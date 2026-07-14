@@ -1,21 +1,40 @@
-import { drawStroke, strokeBBox } from '../lib/strokes';
+import { drawStroke } from '../lib/strokes';
 import type { BBox } from '../lib/strokes';
+import {
+  drawElement,
+  elementBBox,
+  elementVisualPad,
+  hitTestElement,
+  normalizeElement,
+  translateElement,
+} from '../lib/elements';
+import { elementInPolygon } from '../lib/lasso';
+import type { LassoPoint } from '../lib/lasso';
 import { drawLaserTrail, pruneLaserTrail } from '../lib/laser';
 import type { LaserPoint } from '../lib/laser';
-import { distPointToSegment } from '../lib/geometry';
 import { STAGE_WIDTH, STAGE_HEIGHT, BACKING_SCALE, nextId } from '../types';
-import type { Stroke, Tool } from '../types';
+import type { BoardElement, ShapeElement, ShapeKind, Stroke, TextElement, Tool } from '../types';
 import type { Viewport, Point } from './Viewport';
 
 type Command =
-  | { type: 'add'; stroke: Stroke }
-  | { type: 'erase'; entries: { index: number; stroke: Stroke }[] }
-  | { type: 'clear'; strokes: Stroke[] };
+  | { type: 'add'; element: BoardElement }
+  | { type: 'erase'; entries: { index: number; element: BoardElement }[] }
+  | { type: 'clear'; elements: BoardElement[] }
+  | { type: 'move'; ids: string[]; dx: number; dy: number }
+  | { type: 'setText'; id: string; before: string; after: string };
+
+export interface TextEditRequest {
+  /** Existing element being edited, or null to create new text at `world`. */
+  element: TextElement | null;
+  world: Point;
+}
 
 export interface InkEngineCallbacks {
   onHistoryChange(canUndo: boolean, canRedo: boolean): void;
   /** Document changed (add / erase / clear / undo / redo) — autosave hook. */
   onCommit(): void;
+  /** The text tool tapped the board — the host shows a DOM editor. */
+  onTextEdit(request: TextEditRequest): void;
 }
 
 const ERASER_RADIUS = 20;
@@ -24,7 +43,7 @@ const PAN_TAKEOVER_MS = 150;
 /** ...but only while the provisional stroke is still short (stage px). */
 const PAN_TAKEOVER_TRAVEL_PX = 12;
 
-type Mode = 'idle' | 'stroke' | 'erase' | 'pan' | 'laser';
+type Mode = 'idle' | 'stroke' | 'erase' | 'pan' | 'laser' | 'shape' | 'lasso' | 'select-move';
 
 /**
  * Imperative ink core. Owns the committed-ink cache canvas and the
@@ -36,7 +55,7 @@ type Mode = 'idle' | 'stroke' | 'erase' | 'pan' | 'laser';
  * view, which is what lets the recording compositor blit it unchanged.
  */
 export class InkEngine {
-  private strokes: Stroke[] = [];
+  private elements: BoardElement[] = [];
   private undoStack: Command[] = [];
   private redoStack: Command[] = [];
 
@@ -46,13 +65,27 @@ export class InkEngine {
   private strokeStartedAt = 0;
   private lastStagePoint: Point | null = null;
 
+  /** Shape being dragged out; enters the document on pointer-up. */
+  private activeShape: ShapeElement | null = null;
+  private shapeKind: ShapeKind = 'rect';
+
+  /** Lasso polygon in world coordinates while the select tool drags. */
+  private lassoPoints: LassoPoint[] = [];
+  private selectedIds = new Set<string>();
+  private moveLast: Point | null = null;
+  private moveDx = 0;
+  private moveDy = 0;
+
+  /** Element hidden from the ink cache while a DOM text editor covers it. */
+  private hiddenElementId: string | null = null;
+
   /** Live pan/pinch pointers, in stage coordinates. */
   private panPoints = new Map<number, Point>();
   private lastCentroid: Point | null = null;
   private lastPinchDist = 0;
   private spacePan = false;
 
-  private eraseEntries: { index: number; stroke: Stroke }[] = [];
+  private eraseEntries: { index: number; element: BoardElement }[] = [];
   private lastErasePoint: Point | null = null;
 
   /** Eraser cursor position in world coordinates. */
@@ -123,12 +156,20 @@ export class InkEngine {
   // ---- public API ---------------------------------------------------------
 
   setBrush(tool: Tool, color: string, width: number): void {
+    if (this.tool === 'select' && tool !== 'select') {
+      this.selectedIds.clear();
+      this.lassoPoints = [];
+    }
     this.tool = tool;
     this.color = color;
     this.width = width;
     if (tool !== 'eraser') this.cursor = null;
     this.updateCursorStyle();
     this.requestRepaint();
+  }
+
+  setShapeKind(kind: ShapeKind): void {
+    this.shapeKind = kind;
   }
 
   /** Transient pan while the spacebar is held (mouse/keyboard workflow). */
@@ -138,65 +179,169 @@ export class InkEngine {
     this.updateCursorStyle();
   }
 
+  /** Undo applies a command inverted; redo re-applies it forward. */
+  private applyCommand(cmd: Command, invert: boolean): void {
+    switch (cmd.type) {
+      case 'add': {
+        if (invert) {
+          const i = this.elements.indexOf(cmd.element);
+          if (i >= 0) this.elements.splice(i, 1);
+        } else {
+          this.elements.push(cmd.element);
+        }
+        break;
+      }
+      case 'erase': {
+        if (invert) {
+          for (let j = cmd.entries.length - 1; j >= 0; j--) {
+            this.elements.splice(cmd.entries[j].index, 0, cmd.entries[j].element);
+          }
+        } else {
+          for (const entry of cmd.entries) this.elements.splice(entry.index, 1);
+        }
+        break;
+      }
+      case 'clear': {
+        this.elements = invert ? cmd.elements : [];
+        break;
+      }
+      case 'move': {
+        const set = new Set(cmd.ids);
+        const dx = invert ? -cmd.dx : cmd.dx;
+        const dy = invert ? -cmd.dy : cmd.dy;
+        this.elements = this.elements.map((el) =>
+          set.has(el.id) ? translateElement(el, dx, dy) : el,
+        );
+        break;
+      }
+      case 'setText': {
+        const text = invert ? cmd.before : cmd.after;
+        this.elements = this.elements.map((el) =>
+          el.id === cmd.id && el.kind === 'text' ? { ...el, text } : el,
+        );
+        break;
+      }
+    }
+  }
+
   undo(): void {
     const cmd = this.undoStack.pop();
     if (!cmd) return;
-    if (cmd.type === 'add') {
-      const i = this.strokes.indexOf(cmd.stroke);
-      if (i >= 0) this.strokes.splice(i, 1);
-    } else if (cmd.type === 'erase') {
-      for (let j = cmd.entries.length - 1; j >= 0; j--) {
-        this.strokes.splice(cmd.entries[j].index, 0, cmd.entries[j].stroke);
-      }
-    } else {
-      this.strokes = cmd.strokes;
-    }
+    this.applyCommand(cmd, true);
     this.redoStack.push(cmd);
+    this.selectedIds.clear();
     this.afterDocumentChange();
   }
 
   redo(): void {
     const cmd = this.redoStack.pop();
     if (!cmd) return;
-    if (cmd.type === 'add') {
-      this.strokes.push(cmd.stroke);
-    } else if (cmd.type === 'erase') {
-      for (const entry of cmd.entries) this.strokes.splice(entry.index, 1);
-    } else {
-      this.strokes = [];
-    }
+    this.applyCommand(cmd, false);
     this.undoStack.push(cmd);
+    this.selectedIds.clear();
     this.afterDocumentChange();
   }
 
   clear(): void {
-    if (this.strokes.length === 0) return;
-    this.undoStack.push({ type: 'clear', strokes: this.strokes });
+    if (this.elements.length === 0) return;
+    this.undoStack.push({ type: 'clear', elements: this.elements });
     this.redoStack = [];
-    this.strokes = [];
+    this.elements = [];
+    this.selectedIds.clear();
     // Deliberately leaves the viewport alone: clearing removes content,
     // it is not a navigation action.
     this.afterDocumentChange();
   }
 
-  loadStrokes(strokes: Stroke[]): void {
-    this.strokes = strokes;
+  loadStrokes(elements: BoardElement[]): void {
+    // Pre-element saves stored bare strokes without `kind`.
+    this.elements = elements.map(normalizeElement);
     this.undoStack = [];
     this.redoStack = [];
+    this.selectedIds.clear();
+    this.hiddenElementId = null;
     this.rebuildInkCache();
     this.cb.onHistoryChange(false, false);
   }
 
-  getStrokes(): readonly Stroke[] {
-    return this.strokes;
+  getStrokes(): readonly BoardElement[] {
+    return this.elements;
+  }
+
+  getElements(): readonly BoardElement[] {
+    return this.elements;
   }
 
   hasStrokes(): boolean {
-    return this.strokes.length > 0;
+    return this.elements.length > 0;
   }
 
-  getActiveStroke(): Stroke | null {
-    return this.active;
+  /** The element currently being drawn (stroke or shape), for the compositor. */
+  getActiveElement(): BoardElement | null {
+    return this.active ?? this.activeShape;
+  }
+
+  // ---- selection ------------------------------------------------------------
+
+  getSelection(): string[] {
+    return [...this.selectedIds];
+  }
+
+  clearSelection(): void {
+    if (this.selectedIds.size === 0) return;
+    this.selectedIds.clear();
+    this.requestRepaint();
+  }
+
+  deleteSelection(): void {
+    if (this.selectedIds.size === 0) return;
+    const entries: { index: number; element: BoardElement }[] = [];
+    for (let i = this.elements.length - 1; i >= 0; i--) {
+      if (this.selectedIds.has(this.elements[i].id)) {
+        entries.push({ index: i, element: this.elements[i] });
+        this.elements.splice(i, 1);
+      }
+    }
+    this.selectedIds.clear();
+    this.undoStack.push({ type: 'erase', entries });
+    this.redoStack = [];
+    this.afterDocumentChange();
+  }
+
+  // ---- text ------------------------------------------------------------------
+
+  addTextElement(el: TextElement): void {
+    if (el.text.trim() === '') return;
+    this.elements.push(el);
+    this.undoStack.push({ type: 'add', element: el });
+    this.redoStack = [];
+    this.afterDocumentChange();
+  }
+
+  /** Empty text deletes the element; identical text is a no-op. */
+  updateTextElement(id: string, text: string): void {
+    const index = this.elements.findIndex((el) => el.id === id && el.kind === 'text');
+    if (index < 0) return;
+    const el = this.elements[index] as TextElement;
+    if (text.trim() === '') {
+      this.elements.splice(index, 1);
+      this.undoStack.push({ type: 'erase', entries: [{ index, element: el }] });
+    } else if (text !== el.text) {
+      this.elements[index] = { ...el, text };
+      this.undoStack.push({ type: 'setText', id, before: el.text, after: text });
+    } else {
+      return;
+    }
+    this.redoStack = [];
+    this.afterDocumentChange();
+  }
+
+  /** Hide a committed element while a DOM editor overlays it. */
+  setHiddenElementId(id: string | null): void {
+    if (this.hiddenElementId === id) return;
+    this.hiddenElementId = id;
+    this.rebuildInkCache();
+    this.requestRepaint();
   }
 
   getInkCanvas(): HTMLCanvasElement {
@@ -207,19 +352,45 @@ export class InkEngine {
     return this.laserTrail;
   }
 
-  /** Union bbox of all committed ink in world coordinates. */
+  /** Union bbox of all committed content in world coordinates. */
   getInkBBox(): BBox | null {
-    if (this.strokes.length === 0) return null;
+    if (this.elements.length === 0) return null;
     const box: BBox = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
-    for (const stroke of this.strokes) {
-      const b = strokeBBox(stroke);
-      const pad = strokeVisualPad(stroke);
+    for (const el of this.elements) {
+      const b = elementBBox(el);
+      const pad = elementVisualPad(el);
       if (b.minX - pad < box.minX) box.minX = b.minX - pad;
       if (b.minY - pad < box.minY) box.minY = b.minY - pad;
       if (b.maxX + pad > box.maxX) box.maxX = b.maxX + pad;
       if (b.maxY + pad > box.maxY) box.maxY = b.maxY + pad;
     }
     return box;
+  }
+
+  /** Topmost element within touch reach of a world point (select/text tools). */
+  private hitAtPoint(p: Point, kindFilter?: BoardElement['kind']): BoardElement | null {
+    const zoom = this.viewport.get().zoom;
+    for (let i = this.elements.length - 1; i >= 0; i--) {
+      const el = this.elements[i];
+      if (kindFilter && el.kind !== kindFilter) continue;
+      if (el.kind === 'text') {
+        // Text hits anywhere in its box, not just the glyph outlines.
+        const box = elementBBox(el);
+        const slop = 6 / zoom;
+        if (
+          p.x >= box.minX - slop &&
+          p.x <= box.maxX + slop &&
+          p.y >= box.minY - slop &&
+          p.y <= box.maxY + slop
+        ) {
+          return el;
+        }
+        continue;
+      }
+      const reach = 8 / zoom + elementVisualPad(el);
+      if (hitTestElement(el, p, p, reach)) return el;
+    }
+    return null;
   }
 
   // ---- pointer handling ---------------------------------------------------
@@ -303,8 +474,8 @@ export class InkEngine {
       return;
     }
 
-    // Resting palm during an erase drag or while pointing.
-    if (this.mode === 'erase' || this.mode === 'laser') return;
+    // Resting palm during an erase drag, pointing, or a shape/select gesture.
+    if (this.mode !== 'idle') return;
 
     // idle —
     e.preventDefault();
@@ -341,9 +512,56 @@ export class InkEngine {
       return;
     }
 
+    if (tool === 'text') {
+      // Not a drag tool: report the tap (an existing text element or a new
+      // position) and stay idle — the host opens a DOM editor.
+      this.activePointerId = null;
+      const existing = this.hitAtPoint(p, 'text') as TextElement | null;
+      this.cb.onTextEdit({ element: existing, world: p });
+      return;
+    }
+
+    if (tool === 'shape') {
+      this.mode = 'shape';
+      this.activeShape = {
+        kind: 'shape',
+        id: nextId('sh'),
+        shape: this.shapeKind,
+        x: p.x,
+        y: p.y,
+        w: 0,
+        h: 0,
+        color: this.color,
+        strokeWidth: this.width,
+        opacity: 1,
+      };
+      this.requestRepaint();
+      return;
+    }
+
+    if (tool === 'select') {
+      const hit = this.hitAtPoint(p);
+      if (hit) {
+        // Tap on an unselected element selects just it; dragging moves the
+        // whole selection.
+        if (!this.selectedIds.has(hit.id)) this.selectedIds = new Set([hit.id]);
+        this.mode = 'select-move';
+        this.moveLast = p;
+        this.moveDx = 0;
+        this.moveDy = 0;
+      } else {
+        this.selectedIds.clear();
+        this.mode = 'lasso';
+        this.lassoPoints = [{ x: p.x, y: p.y }];
+      }
+      this.requestRepaint();
+      return;
+    }
+
     this.mode = 'stroke';
     this.strokeStartedAt = performance.now();
     this.active = {
+      kind: 'stroke',
       id: nextId('s'),
       tool,
       color: this.color,
@@ -391,6 +609,40 @@ export class InkEngine {
     if (this.mode === 'laser') {
       const p = this.toWorld(e.clientX, e.clientY);
       this.laserTrail.push({ x: p.x, y: p.y, t: performance.now() });
+      this.requestRepaint();
+      return;
+    }
+
+    if (this.mode === 'shape') {
+      if (!this.activeShape) return;
+      const p = this.toWorld(e.clientX, e.clientY);
+      this.activeShape.w = p.x - this.activeShape.x;
+      this.activeShape.h = p.y - this.activeShape.y;
+      this.requestRepaint();
+      return;
+    }
+
+    if (this.mode === 'lasso') {
+      const p = this.toWorld(e.clientX, e.clientY);
+      this.lassoPoints.push({ x: p.x, y: p.y });
+      this.requestRepaint();
+      return;
+    }
+
+    if (this.mode === 'select-move') {
+      const p = this.toWorld(e.clientX, e.clientY);
+      if (!this.moveLast) return;
+      const dx = p.x - this.moveLast.x;
+      const dy = p.y - this.moveLast.y;
+      this.moveLast = p;
+      this.moveDx += dx;
+      this.moveDy += dy;
+      const set = this.selectedIds;
+      this.elements = this.elements.map((el) =>
+        set.has(el.id) ? translateElement(el, dx, dy) : el,
+      );
+      // Coalesce cache rebuilds to one per frame while dragging.
+      this.cacheDirty = true;
       this.requestRepaint();
       return;
     }
@@ -465,10 +717,80 @@ export class InkEngine {
     this.lastStagePoint = null;
     const wasErasing = this.mode === 'erase';
     const wasLaser = this.mode === 'laser';
+    const wasShape = this.mode === 'shape';
+    const wasLasso = this.mode === 'lasso';
+    const wasMove = this.mode === 'select-move';
     this.mode = 'idle';
 
     if (wasLaser) {
       // Nothing to commit — the trail keeps fading on its own.
+      this.requestRepaint();
+      return;
+    }
+
+    if (wasShape) {
+      const shape = this.activeShape;
+      this.activeShape = null;
+      if (shape && !cancelled && (Math.abs(shape.w) > 1 || Math.abs(shape.h) > 1)) {
+        // Rect/ellipse normalize to positive extents; line/arrow keep their
+        // direction (the arrowhead points where the drag ended).
+        const el: ShapeElement =
+          shape.shape === 'rect' || shape.shape === 'ellipse'
+            ? {
+                ...shape,
+                x: Math.min(shape.x, shape.x + shape.w),
+                y: Math.min(shape.y, shape.y + shape.h),
+                w: Math.abs(shape.w),
+                h: Math.abs(shape.h),
+              }
+            : shape;
+        this.elements.push(el);
+        if (!this.cacheDirty) drawElement(this.inkCtx, el, true);
+        this.undoStack.push({ type: 'add', element: el });
+        this.redoStack = [];
+        this.notifyHistory();
+        this.cb.onCommit();
+      }
+      this.requestRepaint();
+      return;
+    }
+
+    if (wasLasso) {
+      const poly = this.lassoPoints;
+      this.lassoPoints = [];
+      if (!cancelled && poly.length >= 3) {
+        this.selectedIds = new Set(
+          this.elements.filter((el) => elementInPolygon(el, poly)).map((el) => el.id),
+        );
+      }
+      this.requestRepaint();
+      return;
+    }
+
+    if (wasMove) {
+      this.moveLast = null;
+      if ((this.moveDx !== 0 || this.moveDy !== 0) && this.selectedIds.size > 0) {
+        if (cancelled) {
+          // Put everything back where it was.
+          const set = this.selectedIds;
+          this.elements = this.elements.map((el) =>
+            set.has(el.id) ? translateElement(el, -this.moveDx, -this.moveDy) : el,
+          );
+          this.cacheDirty = true;
+        } else {
+          this.undoStack.push({
+            type: 'move',
+            ids: [...this.selectedIds],
+            dx: this.moveDx,
+            dy: this.moveDy,
+          });
+          this.redoStack = [];
+          this.notifyHistory();
+          this.cb.onCommit();
+        }
+      }
+      this.moveDx = 0;
+      this.moveDy = 0;
       this.requestRepaint();
       return;
     }
@@ -497,12 +819,12 @@ export class InkEngine {
       const p = stroke.points[0];
       stroke.points.push({ x: p.x + 0.1, y: p.y + 0.1, pressure: p.pressure });
     }
-    this.strokes.push(stroke);
+    this.elements.push(stroke);
     // Incremental — no full rebuild on commit. The ink ctx keeps the viewport
     // transform between rebuilds; skip when a rebuild is already pending
     // (its transform would be stale, and the rebuild redraws everything).
     if (!this.cacheDirty) drawStroke(this.inkCtx, stroke, true);
-    this.undoStack.push({ type: 'add', stroke });
+    this.undoStack.push({ type: 'add', element: stroke });
     this.redoStack = [];
     this.notifyHistory();
     this.cb.onCommit();
@@ -513,28 +835,15 @@ export class InkEngine {
 
   private eraseAlong(from: Point, to: Point): void {
     // The cursor circle has a fixed on-screen size, so its reach in world
-    // units shrinks as you zoom in; stroke thickness is world-sized.
+    // units shrinks as you zoom in; element thickness is world-sized.
     const zoom = this.viewport.get().zoom;
     let removed = false;
-    for (let i = this.strokes.length - 1; i >= 0; i--) {
-      const stroke = this.strokes[i];
-      const reach =
-        ERASER_RADIUS / zoom + stroke.baseWidth * (stroke.tool === 'highlighter' ? 2.4 : 1);
-      const box = strokeBBox(stroke);
-      if (
-        Math.max(from.x, to.x) < box.minX - reach ||
-        Math.min(from.x, to.x) > box.maxX + reach ||
-        Math.max(from.y, to.y) < box.minY - reach ||
-        Math.min(from.y, to.y) > box.maxY + reach
-      ) {
-        continue;
-      }
-      const hit = stroke.points.some(
-        (p) => distPointToSegment(p.x, p.y, from.x, from.y, to.x, to.y) <= reach,
-      );
-      if (hit) {
-        this.strokes.splice(i, 1);
-        this.eraseEntries.push({ index: i, stroke });
+    for (let i = this.elements.length - 1; i >= 0; i--) {
+      const el = this.elements[i];
+      const reach = ERASER_RADIUS / zoom + elementVisualPad(el);
+      if (hitTestElement(el, from, to, reach)) {
+        this.elements.splice(i, 1);
+        this.eraseEntries.push({ index: i, element: el });
         removed = true;
       }
     }
@@ -549,9 +858,10 @@ export class InkEngine {
     ctx.clearRect(0, 0, this.inkCanvas.width, this.inkCanvas.height);
     this.viewport.applyTo(ctx);
     const view = this.viewport.visibleWorldRect();
-    for (const stroke of this.strokes) {
-      const box = strokeBBox(stroke);
-      const pad = strokeVisualPad(stroke);
+    for (const el of this.elements) {
+      if (el.id === this.hiddenElementId) continue;
+      const box = elementBBox(el);
+      const pad = elementVisualPad(el);
       if (
         box.maxX + pad < view.minX ||
         box.minX - pad > view.maxX ||
@@ -560,7 +870,7 @@ export class InkEngine {
       ) {
         continue;
       }
-      drawStroke(ctx, stroke, true);
+      drawElement(ctx, el, true);
     }
   }
 
@@ -583,6 +893,40 @@ export class InkEngine {
     ctx.clearRect(0, 0, this.activeCanvas.width, this.activeCanvas.height);
     this.viewport.applyTo(ctx);
     if (this.active) drawStroke(ctx, this.active);
+    if (this.activeShape) drawElement(ctx, this.activeShape);
+    if (this.lassoPoints.length > 1) {
+      // Lasso trail: world-anchored dashes with screen-constant thickness.
+      const zoom = this.viewport.get().zoom;
+      ctx.save();
+      ctx.strokeStyle = 'rgba(110, 168, 255, 0.9)';
+      ctx.lineWidth = 1.5 / zoom;
+      ctx.setLineDash([6 / zoom, 5 / zoom]);
+      ctx.beginPath();
+      ctx.moveTo(this.lassoPoints[0].x, this.lassoPoints[0].y);
+      for (let i = 1; i < this.lassoPoints.length; i++) {
+        ctx.lineTo(this.lassoPoints[i].x, this.lassoPoints[i].y);
+      }
+      ctx.stroke();
+      ctx.restore();
+    }
+    if (this.tool === 'select' && this.selectedIds.size > 0) {
+      // Selection HUD: dashed bbox per element, screen-space line weight.
+      ctx.setTransform(BACKING_SCALE, 0, 0, BACKING_SCALE, 0, 0);
+      ctx.save();
+      ctx.strokeStyle = 'rgba(110, 168, 255, 0.95)';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([5, 4]);
+      for (const el of this.elements) {
+        if (!this.selectedIds.has(el.id)) continue;
+        const box = elementBBox(el);
+        const pad = elementVisualPad(el);
+        const a = this.viewport.worldToStage({ x: box.minX - pad, y: box.minY - pad });
+        const b = this.viewport.worldToStage({ x: box.maxX + pad, y: box.maxY + pad });
+        ctx.strokeRect(a.x - 2, a.y - 2, b.x - a.x + 4, b.y - a.y + 4);
+      }
+      ctx.restore();
+      this.viewport.applyTo(ctx);
+    }
     if (this.laserTrail.length > 0) {
       const now = performance.now();
       this.laserTrail = pruneLaserTrail(this.laserTrail, now);
@@ -622,11 +966,6 @@ export class InkEngine {
   private updateCursorStyle(): void {
     this.activeCanvas.style.cursor = this.spacePan && this.tool !== 'hand' ? 'grab' : '';
   }
-}
-
-/** How far a stroke's painted outline can extend past its point bbox. */
-function strokeVisualPad(stroke: Stroke): number {
-  return stroke.baseWidth * (stroke.tool === 'highlighter' ? 2.4 : 1);
 }
 
 function centroidOf(pts: Point[]): Point {

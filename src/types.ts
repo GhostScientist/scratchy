@@ -4,8 +4,17 @@ export const STAGE_HEIGHT = 720;
  *  always >= composition resolution for a clean downscale into the recording. */
 export const BACKING_SCALE = 2;
 
-export type Tool = 'pen' | 'highlighter' | 'eraser' | 'hand' | 'laser';
+export type Tool =
+  | 'pen'
+  | 'highlighter'
+  | 'eraser'
+  | 'hand'
+  | 'laser'
+  | 'shape'
+  | 'text'
+  | 'select';
 export type InkTool = 'pen' | 'highlighter';
+export type ShapeKind = 'rect' | 'ellipse' | 'line' | 'arrow';
 
 /** x,y = world coordinates of the stage's top-left corner. */
 export interface ViewportState {
@@ -27,6 +36,7 @@ export interface StrokePoint {
 }
 
 export interface Stroke {
+  kind: 'stroke';
   id: string;
   tool: InkTool;
   color: string;
@@ -36,6 +46,38 @@ export interface Stroke {
   simulatePressure: boolean;
   points: StrokePoint[];
 }
+
+/** Outlined shape in world coordinates. For 'line'/'arrow', (x,y)→(x+w,y+h)
+ *  is the segment, so w/h may be negative; rect/ellipse are normalized on
+ *  commit. */
+export interface ShapeElement {
+  kind: 'shape';
+  id: string;
+  shape: ShapeKind;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  color: string;
+  strokeWidth: number;
+  opacity: number;
+}
+
+export interface TextElement {
+  kind: 'text';
+  id: string;
+  /** Top-left corner in world coordinates. */
+  x: number;
+  y: number;
+  text: string;
+  color: string;
+  /** World units — scales with zoom like ink does. */
+  fontSize: number;
+}
+
+/** Everything that lives in the board document, discriminated by `kind`.
+ *  Pre-element saves lack the field; loaders normalize it to 'stroke'. */
+export type BoardElement = Stroke | ShapeElement | TextElement;
 
 export interface CameraLayout {
   x: number;

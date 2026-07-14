@@ -1,4 +1,5 @@
 import { nextId, DEFAULT_CAMERA_LAYOUT, DEFAULT_VIEWPORT } from '../types';
+import { normalizeElement } from '../lib/elements';
 import { loadLesson } from './autosave';
 import type { SavedLesson } from './autosave';
 import {
@@ -12,10 +13,21 @@ import {
   STORE_META,
 } from './db';
 
-/** A lesson stored in IndexedDB: one of possibly many named boards. */
+/** A lesson stored in IndexedDB: one of possibly many named boards.
+ *  v4 introduced non-stroke elements (shapes/text) discriminated by `kind`;
+ *  v3 boards migrate by tagging every entry as a stroke. */
 export interface SavedBoard extends Omit<SavedLesson, 'version'> {
-  version: 3;
+  version: 4;
   id: string;
+}
+
+function migrateBoard(raw: SavedBoard | (Omit<SavedBoard, 'version'> & { version: 3 })): SavedBoard {
+  if (raw.version === 4) return raw;
+  return {
+    ...raw,
+    version: 4,
+    strokes: (raw.strokes ?? []).map(normalizeElement),
+  };
 }
 
 export interface BoardMeta {
@@ -41,7 +53,7 @@ const ACTIVE_KEY = 'activeBoardId';
 
 function blankBoard(): SavedBoard {
   return {
-    version: 3,
+    version: 4,
     id: nextId('b'),
     title: 'Untitled lesson',
     background: 'white',
@@ -95,12 +107,12 @@ export function initBoards(): Promise<{ board: SavedBoard; boards: BoardMeta[] }
 async function doInitBoards(): Promise<{ board: SavedBoard; boards: BoardMeta[] } | null> {
   if (!idbAvailable()) return null;
   try {
-    let boards = await idbGetAll<SavedBoard>(STORE_BOARDS);
+    let boards = (await idbGetAll<SavedBoard>(STORE_BOARDS)).map(migrateBoard);
 
     if (boards.length === 0) {
       const legacy = loadLesson();
       const first: SavedBoard = legacy
-        ? { ...legacy, version: 3, id: nextId('b') }
+        ? migrateBoard({ ...legacy, version: 3, id: nextId('b') })
         : blankBoard();
       await idbPut(STORE_BOARDS, first);
       await idbPut(STORE_META, first.id, ACTIVE_KEY);
@@ -132,7 +144,8 @@ export async function saveBoard(board: SavedBoard): Promise<boolean> {
 
 export async function loadBoard(id: string): Promise<SavedBoard | null> {
   try {
-    return (await idbGet<SavedBoard>(STORE_BOARDS, id)) ?? null;
+    const board = await idbGet<SavedBoard>(STORE_BOARDS, id);
+    return board ? migrateBoard(board) : null;
   } catch {
     return null;
   }

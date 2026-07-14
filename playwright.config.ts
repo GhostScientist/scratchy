@@ -11,9 +11,15 @@ export default defineConfig({
   use: {
     baseURL: 'http://localhost:5173',
     viewport: { width: 1500, height: 900 },
-    launchOptions: existsSync(PREINSTALLED_CHROMIUM)
-      ? { executablePath: PREINSTALLED_CHROMIUM }
-      : {},
+    launchOptions: {
+      // Fake camera/mic so recording tests never hit a permission prompt.
+      args: [
+        '--use-fake-device-for-media-stream',
+        '--use-fake-ui-for-media-stream',
+        '--autoplay-policy=no-user-gesture-required',
+      ],
+      ...(existsSync(PREINSTALLED_CHROMIUM) ? { executablePath: PREINSTALLED_CHROMIUM } : {}),
+    },
   },
   webServer: {
     command: 'npm run dev',

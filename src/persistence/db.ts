@@ -5,11 +5,15 @@
  */
 
 const DB_NAME = 'scratchy';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 export const STORE_BOARDS = 'boards';
 export const STORE_TAKES = 'takes';
 export const STORE_META = 'meta';
+/** In-flight/interrupted recording manifests, keyed by sessionId (v2). */
+export const STORE_REC_SESSIONS = 'recSessions';
+/** Recording chunks, keyed [sessionId, index] so a range read returns them in order (v2). */
+export const STORE_REC_CHUNKS = 'recChunks';
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -35,6 +39,12 @@ function open(): Promise<IDBDatabase> {
         }
         if (!db.objectStoreNames.contains(STORE_META)) {
           db.createObjectStore(STORE_META);
+        }
+        if (!db.objectStoreNames.contains(STORE_REC_SESSIONS)) {
+          db.createObjectStore(STORE_REC_SESSIONS, { keyPath: 'sessionId' });
+        }
+        if (!db.objectStoreNames.contains(STORE_REC_CHUNKS)) {
+          db.createObjectStore(STORE_REC_CHUNKS, { keyPath: ['sessionId', 'index'] });
         }
       };
       req.onsuccess = () => resolve(req.result);
@@ -73,4 +83,15 @@ export async function idbPut(store: string, value: unknown, key?: IDBValidKey): 
 export async function idbDelete(store: string, key: IDBValidKey): Promise<void> {
   const db = await open();
   await request(db.transaction(store, 'readwrite').objectStore(store).delete(key));
+}
+
+/** getAll over a key range — results come back in key order. */
+export async function idbGetAllRange<T>(store: string, range: IDBKeyRange): Promise<T[]> {
+  const db = await open();
+  return request(db.transaction(store, 'readonly').objectStore(store).getAll(range));
+}
+
+export async function idbDeleteRange(store: string, range: IDBKeyRange): Promise<void> {
+  const db = await open();
+  await request(db.transaction(store, 'readwrite').objectStore(store).delete(range));
 }

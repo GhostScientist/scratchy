@@ -236,6 +236,84 @@ export function ImageIcon() {
   );
 }
 
+export function TextIcon() {
+  return (
+    <Svg>
+      <path d="M5 6.5V4.5h14v2M12 4.5v15M9.5 19.5h5" />
+    </Svg>
+  );
+}
+
+export function SelectIcon() {
+  return (
+    <Svg>
+      <path d="M13.5 13.5l6 2.2-2.6 1.2 2 3-1.8 1.1-2-3-2 2z" />
+      <path
+        d="M12 4a8 8 0 1 0-1 15.7"
+        strokeDasharray="3 3"
+      />
+    </Svg>
+  );
+}
+
+export function ShapeRectToolIcon() {
+  return (
+    <Svg>
+      <rect x="4" y="6" width="16" height="12" rx="1" />
+    </Svg>
+  );
+}
+
+export function ShapeEllipseToolIcon() {
+  return (
+    <Svg>
+      <ellipse cx="12" cy="12" rx="8" ry="6" />
+    </Svg>
+  );
+}
+
+export function ShapeLineToolIcon() {
+  return (
+    <Svg>
+      <path d="M5 19L19 5" />
+    </Svg>
+  );
+}
+
+export function ShapeArrowToolIcon() {
+  return (
+    <Svg>
+      <path d="M5 19L19 5" />
+      <path d="M11.5 5H19v7.5" />
+    </Svg>
+  );
+}
+
+export function PauseIcon() {
+  return (
+    <Svg>
+      <path d="M9 5.5v13M15 5.5v13" strokeWidth="2.4" />
+    </Svg>
+  );
+}
+
+export function PlayIcon() {
+  return (
+    <Svg>
+      <path d="M8 5.5l11 6.5-11 6.5z" />
+    </Svg>
+  );
+}
+
+export function GearIcon() {
+  return (
+    <Svg>
+      <circle cx="12" cy="12" r="3.2" />
+      <path d="M12 3.5v2.2M12 18.3v2.2M20.5 12h-2.2M5.7 12H3.5M18 6l-1.6 1.6M7.6 16.4L6 18M18 18l-1.6-1.6M7.6 7.6L6 6" />
+    </Svg>
+  );
+}
+
 export function DownloadIcon() {
   return (
     <Svg>

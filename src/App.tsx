@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { StageCanvas } from './ink/StageCanvas';
-import type { InkEngine } from './ink/InkEngine';
+import type { InkEngine, TextEditRequest } from './ink/InkEngine';
+import { TextEditorOverlay } from './ui/TextEditorOverlay';
 import type { Viewport } from './ink/Viewport';
 import { CameraOverlay } from './media/CameraOverlay';
 import { useCamera } from './media/useCamera';
 import { useMicrophone } from './media/useMicrophone';
 import { useRecorder } from './recording/useRecorder';
+import type { RecorderPhase } from './recording/useRecorder';
 import type { CompositorSources } from './recording/Compositor';
 import { PreviewModal } from './recording/PreviewModal';
 import { Toolbar } from './ui/Toolbar';
@@ -31,6 +33,17 @@ import type { BoardMeta, StoredTake } from './persistence/boards';
 import { BoardsMenu } from './ui/BoardsMenu';
 import { TakesDrawer } from './ui/TakesDrawer';
 import { ExportMenu } from './ui/ExportMenu';
+import { SettingsMenu } from './ui/SettingsMenu';
+import { loadSettings, saveSettings } from './settings/settings';
+import type { AppSettings } from './settings/settings';
+import { ensureDeviceProfile } from './capability/probe';
+import { loadDeviceProfile } from './capability/profile';
+import type { DeviceProfile } from './capability/profile';
+import { presetById, outputCrop } from './recording/presets';
+import { recoverSessions, assembleSession, deleteSessionById } from './recording/RecordingStore';
+import type { RecoverableSession } from './recording/RecordingStore';
+import { RecoveryCard } from './ui/RecoveryCard';
+import type { Take } from './types';
 import { exportViewPng, exportBoardPng, downloadBlob } from './export/png';
 import { clamp } from './lib/geometry';
 import {
@@ -41,7 +54,7 @@ import {
   cameraAspectFor,
   nextId,
 } from './types';
-import type { BackgroundKind, CameraLayout, CameraShape, Tool } from './types';
+import type { BackgroundKind, CameraLayout, CameraShape, ShapeKind, Tool } from './types';
 
 interface Toast {
   id: number;
@@ -52,6 +65,9 @@ export default function App() {
   const [tool, setTool] = useState<Tool>('pen');
   const [color, setColor] = useState('#1d1f24');
   const [width, setWidth] = useState(4);
+  const [shapeKind, setShapeKind] = useState<ShapeKind>('rect');
+  // Open DOM text editor (new text or an existing element being edited).
+  const [textEdit, setTextEdit] = useState<TextEditRequest | null>(null);
   const [background, setBackground] = useState<BackgroundKind>('white');
   const [title, setTitle] = useState('Untitled lesson');
   const [collapsed, setCollapsed] = useState(false);
@@ -73,6 +89,28 @@ export default function App() {
   const [storageEstimate, setStorageEstimate] = useState<{ usage: number; quota: number } | null>(
     null,
   );
+  // Device-global preferences (handedness, recording preset) — localStorage,
+  // independent of the per-board lesson autosave.
+  const [settings, setSettings] = useState<AppSettings>(loadSettings);
+
+  const updateSettings = useCallback((patch: Partial<AppSettings>) => {
+    setSettings((current) => {
+      const next = { ...current, ...patch };
+      saveSettings(next);
+      return next;
+    });
+  }, []);
+
+  // Capability profile (SPEC §9) — probed lazily before the first recording.
+  const [deviceProfile, setDeviceProfile] = useState<DeviceProfile | null>(loadDeviceProfile);
+  const [probing, setProbing] = useState(false);
+  // Recording sessions left behind by a crash/reload, offered for recovery.
+  const [recoverable, setRecoverable] = useState<RecoverableSession[]>([]);
+  const [recovered, setRecovered] = useState<{
+    take: Take;
+    sessionId: string;
+    boardId: string | null;
+  } | null>(null);
 
   const camera = useCamera();
   const mic = useMicrophone();
@@ -144,7 +182,7 @@ export default function App() {
       if (storageModeRef.current === 'idb') {
         if (!boardId) return Promise.resolve();
         saveChainRef.current = saveChainRef.current.then(async () => {
-          const ok = await saveBoard({ ...lesson, version: 3, id: boardId });
+          const ok = await saveBoard({ ...lesson, version: 4, id: boardId });
           if (!ok) warnSaveFailed();
         });
         setBoards((prev) => {
@@ -222,6 +260,8 @@ export default function App() {
         viewport.onChange(() => scheduleSave());
         scheduleSave();
         setNav({ engine, viewport });
+        // Surface recordings interrupted by a crash or reload (SPEC §6.5).
+        void recoverSessions().then(setRecoverable);
       })();
     },
     [applyLesson, scheduleSave],
@@ -236,6 +276,56 @@ export default function App() {
     setInkRevision((r) => r + 1);
     scheduleSave();
   }, [scheduleSave]);
+
+  // ---- text tool ----------------------------------------------------------
+
+  // Ref mirror so commit/cancel run their engine side effects exactly once —
+  // React StrictMode double-invokes setState updaters, so side effects can't
+  // live inside them.
+  const textEditRef = useRef<TextEditRequest | null>(null);
+
+  const handleTextEdit = useCallback((request: TextEditRequest) => {
+    // A tap while an editor is open only blurs it (the blur commits) —
+    // pointerdown reaches the canvas before blur fires, so ignore it here.
+    if (textEditRef.current) return;
+    // Hide the committed element while the DOM editor covers it.
+    if (request.element) engineRef.current?.setHiddenElementId(request.element.id);
+    textEditRef.current = request;
+    setTextEdit(request);
+  }, []);
+
+  const textDefaults = useRef({ color, width });
+  textDefaults.current = { color, width };
+
+  const commitText = useCallback((value: string) => {
+    const engine = engineRef.current;
+    const current = textEditRef.current;
+    if (!engine || !current) return;
+    textEditRef.current = null;
+    engine.setHiddenElementId(null);
+    if (current.element) {
+      engine.updateTextElement(current.element.id, value);
+    } else if (value.trim() !== '') {
+      engine.addTextElement({
+        kind: 'text',
+        id: nextId('tx'),
+        x: current.world.x,
+        y: current.world.y,
+        text: value,
+        color: textDefaults.current.color,
+        // Width steps (2/4/7/12) map onto readable world-space type sizes.
+        fontSize: textDefaults.current.width * 8,
+      });
+    }
+    setTextEdit(null);
+  }, []);
+
+  const cancelText = useCallback(() => {
+    if (!textEditRef.current) return;
+    textEditRef.current = null;
+    engineRef.current?.setHiddenElementId(null);
+    setTextEdit(null);
+  }, []);
 
   // ---- boards ----------------------------------------------------------------
 
@@ -382,7 +472,7 @@ export default function App() {
     () => ({
       getBackground: () => stateRef.current.background,
       getInkCanvas: () => engineRef.current?.getInkCanvas() ?? null,
-      getActiveStroke: () => engineRef.current?.getActiveStroke() ?? null,
+      getActiveElement: () => engineRef.current?.getActiveElement() ?? null,
       getViewport: () => viewportRef.current?.get() ?? { ...DEFAULT_VIEWPORT },
       getLaserTrail: () => engineRef.current?.getLaserTrail() ?? [],
       getVideo: () =>
@@ -394,8 +484,79 @@ export default function App() {
     [],
   );
 
+  const preset = presetById(settings.presetId);
+  const presetRef = useRef(preset);
+  presetRef.current = preset;
+  const getPreset = useCallback(() => presetRef.current, []);
+
   const getMicStream = useCallback(() => micStreamRef.current, []);
-  const recorder = useRecorder(sources, getMicStream);
+  const getSessionMeta = useCallback(
+    () => ({ boardId: boardIdRef.current, title: lessonRef.current.title }),
+    [],
+  );
+  const recorder = useRecorder(sources, getMicStream, getPreset, getSessionMeta, pushToast);
+
+  // ---- crash recovery --------------------------------------------------------
+
+  const handleRecoverSession = useCallback(
+    async (session: RecoverableSession) => {
+      setRecoverable((list) => list.filter((s) => s !== session));
+      const blob = await assembleSession(session.manifest.sessionId);
+      if (!blob || blob.size === 0) {
+        pushToast('Could not recover that recording.');
+        void deleteSessionById(session.manifest.sessionId);
+        return;
+      }
+      setRecovered({
+        take: {
+          blob,
+          url: URL.createObjectURL(blob),
+          mimeType: session.manifest.mimeType,
+          extension: session.manifest.extension,
+          durationMs: session.manifest.activeMs,
+          createdAt: session.manifest.startedAt,
+        },
+        sessionId: session.manifest.sessionId,
+        boardId: session.manifest.boardId,
+      });
+    },
+    [pushToast],
+  );
+
+  const handleDiscardSession = useCallback(
+    (session: RecoverableSession) => {
+      setRecoverable((list) => list.filter((s) => s !== session));
+      void deleteSessionById(session.manifest.sessionId);
+      pushToast('Recording discarded.');
+    },
+    [pushToast],
+  );
+
+  const closeRecovered = useCallback(() => {
+    setRecovered((current) => {
+      if (current) {
+        URL.revokeObjectURL(current.take.url);
+        void deleteSessionById(current.sessionId);
+      }
+      return null;
+    });
+  }, []);
+
+  const handleSaveRecovered = useCallback(async (): Promise<boolean> => {
+    if (!recovered) return false;
+    const boardId = recovered.boardId ?? boardIdRef.current;
+    if (!boardId) return false;
+    return saveTake({
+      id: nextId('t'),
+      boardId,
+      title: lessonRef.current.title,
+      blob: recovered.take.blob,
+      mimeType: recovered.take.mimeType,
+      extension: recovered.take.extension,
+      durationMs: recovered.take.durationMs,
+      createdAt: recovered.take.createdAt,
+    });
+  }, [recovered]);
 
   const recorderTake = recorder.take;
   const handleSaveTake = useCallback(async (): Promise<boolean> => {
@@ -416,21 +577,125 @@ export default function App() {
   const recordingActive =
     recorder.phase === 'countdown' ||
     recorder.phase === 'recording' ||
+    recorder.phase === 'paused' ||
     recorder.phase === 'stopping';
+
+  // DEV hook so e2e tests can poll the recorder without driving the UI.
+  const recorderApiRef = useRef(recorder);
+  recorderApiRef.current = recorder;
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    (window as unknown as Record<string, unknown>).__scratchyRecorder = {
+      getPhase: () => recorderApiRef.current.phase,
+      getElapsedMs: () => recorderApiRef.current.elapsedMs,
+    };
+  }, []);
 
   const tabHintShown = useRef(false);
   const handleRecord = () => {
-    if (recorder.phase !== 'idle') return;
-    if (!mic.enabled) {
-      pushToast('Recording without microphone — tap the mic to add your voice.');
-    }
-    if (!tabHintShown.current) {
-      tabHintShown.current = true;
-      pushToast('Keep this tab visible while recording.');
-    }
-    setCollapsed(true);
-    recorder.start();
+    if (recorder.phase !== 'idle' || probing) return;
+    void (async () => {
+      // Gate recording behind the capability probe — cached after the first
+      // pass, so this is instant on every later take.
+      setProbing(true);
+      const result = await ensureDeviceProfile();
+      setProbing(false);
+      if (!result.ok) {
+        pushToast(result.reason);
+        return;
+      }
+      setDeviceProfile(result.profile);
+      if (!result.profile.smokeOk) {
+        // Compatibility mode: the smoke test failed but only missing APIs
+        // hard-block — let the real recorder be the judge.
+        pushToast(
+          result.profile.warnings[0] ??
+            'The device check could not verify recording — trying anyway.',
+        );
+      }
+      // A gated preset can outlive a re-probe that says no — drop back.
+      if (presetRef.current.needsPerformance && !result.profile.supports1080p) {
+        presetRef.current = presetById('compat');
+        updateSettings({ presetId: 'compat' });
+        pushToast('Dropped to 720p — this device failed the 1080p performance check.');
+      }
+      // SPEC §6.6: check storage headroom before recording, warn — don't block.
+      try {
+        const est = await navigator.storage?.estimate?.();
+        if (est?.quota && est.quota - (est.usage ?? 0) < 200 * 1024 * 1024) {
+          pushToast('Device storage is low — long recordings may not save.');
+        }
+      } catch {
+        // Estimate is a nicety only.
+      }
+      if (!mic.enabled) {
+        pushToast('Recording without microphone — tap the mic to add your voice.');
+      }
+      if (!tabHintShown.current) {
+        tabHintShown.current = true;
+        pushToast('Keep this tab visible while recording.');
+      }
+      setCollapsed(true);
+      recorder.start();
+    })();
   };
+
+  const handleDeviceCheck = useCallback(() => {
+    void (async () => {
+      setProbing(true);
+      const result = await ensureDeviceProfile(true);
+      setProbing(false);
+      if (result.ok) {
+        setDeviceProfile(result.profile);
+        pushToast(
+          result.profile.warnings.length > 0
+            ? result.profile.warnings[0]
+            : 'Device check passed — this browser records fine.',
+        );
+      } else {
+        pushToast(result.reason);
+      }
+    })();
+  }, [pushToast]);
+
+  const handlePreset = useCallback(
+    (id: string) => {
+      const next = presetById(id);
+      if (!next.needsPerformance) {
+        updateSettings({ presetId: next.id });
+        return;
+      }
+      // 1080p-class presets are gated on the performance probe (SPEC §6.5).
+      void (async () => {
+        let profile = deviceProfile;
+        if (!profile) {
+          setProbing(true);
+          const result = await ensureDeviceProfile();
+          setProbing(false);
+          if (!result.ok) {
+            pushToast(result.reason);
+            return;
+          }
+          profile = result.profile;
+          setDeviceProfile(profile);
+        }
+        if (profile.supports1080p) {
+          updateSettings({ presetId: next.id });
+        } else {
+          pushToast('This device failed the 1080p performance check — staying at 720p.');
+        }
+      })();
+    },
+    [deviceProfile, pushToast, updateSettings],
+  );
+
+  const deviceSummary = deviceProfile
+    ? `Records ${deviceProfile.mimeType.split(';')[0].split('/')[1]?.toUpperCase() ?? 'video'} · ${
+        deviceProfile.supports1080p ? 'up to 1080p' : '720p (compatibility)'
+      }${deviceProfile.pauseReliable ? '' : ' · pause unavailable'}`
+    : null;
+  // Until a probe says otherwise, offer pause (SPEC §6.5: hide when unreliable).
+  const pauseReliable = deviceProfile?.pauseReliable ?? true;
 
   // ---- camera / mic ----------------------------------------------------------
 
@@ -492,8 +757,21 @@ export default function App() {
 
   // ---- keyboard shortcuts ------------------------------------------------------
 
-  const keyActionsRef = useRef({ camera: handleCameraButton, mic: handleMicButton });
-  keyActionsRef.current = { camera: handleCameraButton, mic: handleMicButton };
+  const keyActionsRef = useRef({
+    camera: handleCameraButton,
+    mic: handleMicButton,
+    recorderPhase: recorder.phase as RecorderPhase,
+    pauseResume: () => {},
+  });
+  keyActionsRef.current = {
+    camera: handleCameraButton,
+    mic: handleMicButton,
+    recorderPhase: recorder.phase,
+    pauseResume: () => {
+      if (recorder.phase === 'recording') recorder.pause();
+      else if (recorder.phase === 'paused') recorder.resume();
+    },
+  };
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -513,9 +791,15 @@ export default function App() {
       }
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.code === 'Space') {
-        // Held spacebar pans with any pointer, like design tools.
         e.preventDefault();
-        if (!e.repeat) engineRef.current?.setSpacePan(true);
+        const phase = keyActionsRef.current.recorderPhase;
+        if (phase === 'recording' || phase === 'paused') {
+          // SPEC §12: Space pauses/resumes while recording.
+          if (!e.repeat) keyActionsRef.current.pauseResume();
+        } else if (!e.repeat) {
+          // Held spacebar pans with any pointer, like design tools.
+          engineRef.current?.setSpacePan(true);
+        }
         return;
       }
       switch (key) {
@@ -533,6 +817,19 @@ export default function App() {
           break;
         case 'l':
           setTool('laser');
+          break;
+        case 'r':
+          setTool('shape');
+          break;
+        case 't':
+          setTool('text');
+          break;
+        case 's':
+          setTool('select');
+          break;
+        case 'delete':
+        case 'backspace':
+          engineRef.current?.deleteSelection();
           break;
         case 'z':
           if (e.shiftKey) engineRef.current?.redo();
@@ -580,13 +877,15 @@ export default function App() {
     'stage',
     `bg-${background}`,
     `tool-${tool}`,
-    recorder.phase === 'recording' || recorder.phase === 'stopping' ? 'is-recording' : '',
+    recorder.phase === 'recording' || recorder.phase === 'paused' || recorder.phase === 'stopping'
+      ? 'is-recording'
+      : '',
   ]
     .filter(Boolean)
     .join(' ');
 
   return (
-    <div className="app">
+    <div className={`app${settings.handedness === 'left' ? ' hand-left' : ''}`}>
       <TopBar
         title={title}
         onTitle={setTitle}
@@ -608,6 +907,19 @@ export default function App() {
             onExportBoard={() => void handleExport('board')}
           />
         }
+        settingsSlot={
+          <SettingsMenu
+            handedness={settings.handedness}
+            onHandedness={(handedness) => updateSettings({ handedness })}
+            presetId={preset.id}
+            presetLocked={recordingActive}
+            supports1080p={deviceProfile ? deviceProfile.supports1080p : null}
+            onPreset={handlePreset}
+            deviceSummary={deviceSummary}
+            deviceChecking={probing}
+            onDeviceCheck={handleDeviceCheck}
+          />
+        }
         onLibrary={activeBoardId ? handleOpenTakes : undefined}
         micEnabled={mic.enabled}
         micMuted={mic.muted}
@@ -617,6 +929,9 @@ export default function App() {
         onCamera={handleCameraButton}
         phase={recorder.phase}
         elapsedMs={recorder.elapsedMs}
+        probing={probing}
+        onPause={pauseReliable ? recorder.pause : undefined}
+        onResume={pauseReliable ? recorder.resume : undefined}
         onRecord={handleRecord}
         onCancelCountdown={recorder.cancelCountdown}
         onStop={recorder.stop}
@@ -630,10 +945,23 @@ export default function App() {
               tool={tool}
               color={color}
               width={width}
+              shapeKind={shapeKind}
               onReady={handleEngineReady}
               onHistoryChange={handleHistoryChange}
               onCommit={handleCommit}
+              onTextEdit={handleTextEdit}
             />
+            {textEdit && nav && (
+              <TextEditorOverlay
+                key={textEdit.element?.id ?? `${textEdit.world.x},${textEdit.world.y}`}
+                request={textEdit}
+                viewport={nav.viewport}
+                color={color}
+                fontSize={width * 8}
+                onCommit={commitText}
+                onCancel={cancelText}
+              />
+            )}
             {camera.stream && cameraVisible && (
               <CameraOverlay
                 stream={camera.stream}
@@ -650,6 +978,12 @@ export default function App() {
                   setCameraVisible(true);
                 }}
               />
+            )}
+            {preset.id === 'vertical' && (
+              // SPEC §4.6 "a predictable frame": mark the recorded 9:16 crop.
+              <div className="frame-guide" aria-hidden="true">
+                <div className="frame-guide-window" style={{ width: outputCrop(preset).w }} />
+              </div>
             )}
             {!hasInk && recorder.phase === 'idle' && (
               <div className="empty-hint" aria-hidden="true">
@@ -683,6 +1017,7 @@ export default function App() {
           color={color}
           width={width}
           background={background}
+          shapeKind={shapeKind}
           canUndo={history.undo}
           canRedo={history.redo}
           collapsed={collapsed}
@@ -690,6 +1025,7 @@ export default function App() {
           onColor={setColor}
           onWidth={setWidth}
           onBackground={setBackground}
+          onShapeKind={setShapeKind}
           onUndo={() => engineRef.current?.undo()}
           onRedo={() => engineRef.current?.redo()}
           onClear={() => engineRef.current?.clear()}
@@ -708,6 +1044,28 @@ export default function App() {
             pushToast('Take deleted.');
           }}
           onSaveToLibrary={activeBoardId ? handleSaveTake : undefined}
+        />
+      )}
+
+      {recoverable.length > 0 && recorder.phase === 'idle' && !recovered && (
+        <RecoveryCard
+          sessions={recoverable}
+          onRecover={(s) => void handleRecoverSession(s)}
+          onDiscard={handleDiscardSession}
+        />
+      )}
+
+      {recovered && (
+        <PreviewModal
+          take={recovered.take}
+          title={title}
+          onTitle={setTitle}
+          onClose={closeRecovered}
+          onDelete={() => {
+            closeRecovered();
+            pushToast('Recording discarded.');
+          }}
+          onSaveToLibrary={activeBoardId || recovered.boardId ? handleSaveRecovered : undefined}
         />
       )}
 
