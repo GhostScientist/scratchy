@@ -42,8 +42,25 @@ export function strokePath(stroke: Stroke): Path2D | null {
   return path;
 }
 
-export function drawStroke(ctx: CanvasRenderingContext2D, stroke: Stroke): void {
-  const path = strokePath(stroke);
+/** World-space outline paths for committed strokes. Point arrays are immutable
+ *  once committed, so the path never goes stale; entries drop with the stroke. */
+const pathCache = new WeakMap<Stroke, Path2D | null>();
+
+/**
+ * Set `cache` for committed strokes only: the in-progress stroke gains points
+ * every event and must be re-outlined on each draw.
+ */
+export function drawStroke(ctx: CanvasRenderingContext2D, stroke: Stroke, cache = false): void {
+  let path: Path2D | null | undefined;
+  if (cache) {
+    path = pathCache.get(stroke);
+    if (path === undefined) {
+      path = strokePath(stroke);
+      pathCache.set(stroke, path);
+    }
+  } else {
+    path = strokePath(stroke);
+  }
   if (!path) return;
   ctx.save();
   ctx.globalAlpha = stroke.opacity;

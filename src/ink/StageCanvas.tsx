@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { InkEngine } from './InkEngine';
+import { Viewport } from './Viewport';
 import { drawBackground } from '../lib/backgrounds';
 import { STAGE_WIDTH, STAGE_HEIGHT, BACKING_SCALE } from '../types';
 import type { BackgroundKind, Tool } from '../types';
@@ -9,7 +10,7 @@ interface StageCanvasProps {
   tool: Tool;
   color: string;
   width: number;
-  onReady(engine: InkEngine): void;
+  onReady(engine: InkEngine, viewport: Viewport): void;
   onHistoryChange(canUndo: boolean, canRedo: boolean): void;
   onCommit(): void;
 }
@@ -19,6 +20,8 @@ export function StageCanvas(props: StageCanvasProps) {
   const inkRef = useRef<HTMLCanvasElement>(null);
   const activeRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<InkEngine | null>(null);
+  const viewportRef = useRef<Viewport | null>(null);
+  const bgKindRef = useRef(props.background);
 
   // Latest callbacks without re-creating the engine.
   const cbRef = useRef({
@@ -32,16 +35,57 @@ export function StageCanvas(props: StageCanvasProps) {
     onCommit: props.onCommit,
   };
 
+  const redrawBackground = () => {
+    const canvas = bgRef.current;
+    const viewport = viewportRef.current;
+    if (!canvas || !viewport) return;
+    const ctx = canvas.getContext('2d')!;
+    ctx.setTransform(BACKING_SCALE, 0, 0, BACKING_SCALE, 0, 0);
+    drawBackground(ctx, bgKindRef.current, {
+      ...viewport.get(),
+      outW: STAGE_WIDTH,
+      outH: STAGE_HEIGHT,
+    });
+  };
+  const redrawRef = useRef(redrawBackground);
+  redrawRef.current = redrawBackground;
+
   useEffect(() => {
-    const engine = new InkEngine(inkRef.current!, activeRef.current!, {
+    const bgCanvas = bgRef.current!;
+    bgCanvas.width = STAGE_WIDTH * BACKING_SCALE;
+    bgCanvas.height = STAGE_HEIGHT * BACKING_SCALE;
+
+    const viewport = new Viewport();
+    const engine = new InkEngine(inkRef.current!, activeRef.current!, viewport, {
       onHistoryChange: (u, r) => cbRef.current.onHistoryChange(u, r),
       onCommit: () => cbRef.current.onCommit(),
     });
     engineRef.current = engine;
-    cbRef.current.onReady(engine);
+    viewportRef.current = viewport;
+
+    // Background scrolls with the world; coalesce pan/pinch bursts into one
+    // redraw per frame.
+    let bgRaf = 0;
+    const unsubscribe = viewport.onChange(() => {
+      if (bgRaf) return;
+      bgRaf = requestAnimationFrame(() => {
+        bgRaf = 0;
+        redrawRef.current();
+      });
+    });
+    redrawRef.current();
+
+    if (import.meta.env.DEV) {
+      (window as unknown as Record<string, unknown>).__scratchy = { engine, viewport };
+    }
+
+    cbRef.current.onReady(engine, viewport);
     return () => {
+      unsubscribe();
+      cancelAnimationFrame(bgRaf);
       engine.destroy();
       engineRef.current = null;
+      viewportRef.current = null;
     };
   }, []);
 
@@ -50,12 +94,8 @@ export function StageCanvas(props: StageCanvasProps) {
   }, [props.tool, props.color, props.width]);
 
   useEffect(() => {
-    const canvas = bgRef.current!;
-    canvas.width = STAGE_WIDTH * BACKING_SCALE;
-    canvas.height = STAGE_HEIGHT * BACKING_SCALE;
-    const ctx = canvas.getContext('2d')!;
-    ctx.setTransform(BACKING_SCALE, 0, 0, BACKING_SCALE, 0, 0);
-    drawBackground(ctx, props.background);
+    bgKindRef.current = props.background;
+    redrawRef.current();
   }, [props.background]);
 
   return (

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { StageCanvas } from './ink/StageCanvas';
 import type { InkEngine } from './ink/InkEngine';
+import type { Viewport } from './ink/Viewport';
 import { CameraOverlay } from './media/CameraOverlay';
 import { useCamera } from './media/useCamera';
 import { useMicrophone } from './media/useMicrophone';
@@ -16,6 +17,7 @@ import {
   STAGE_WIDTH,
   STAGE_HEIGHT,
   DEFAULT_CAMERA_LAYOUT,
+  DEFAULT_VIEWPORT,
   cameraAspectFor,
 } from './types';
 import type { BackgroundKind, CameraLayout, CameraShape, Tool } from './types';
@@ -43,6 +45,7 @@ export default function App() {
   const mic = useMicrophone();
 
   const engineRef = useRef<InkEngine | null>(null);
+  const viewportRef = useRef<Viewport | null>(null);
   const videoElRef = useRef<HTMLVideoElement | null>(null);
   const scaleRef = useRef(1);
   const cameraLayoutRef = useRef<CameraLayout>(DEFAULT_CAMERA_LAYOUT);
@@ -81,9 +84,10 @@ export default function App() {
       const engine = engineRef.current;
       if (!engine) return;
       const ok = saveLesson({
-        version: 1,
+        version: 2,
         ...lessonRef.current,
         cameraLayout: cameraLayoutRef.current,
+        viewport: viewportRef.current?.get() ?? { ...DEFAULT_VIEWPORT },
         strokes: compactStrokes(engine.getStrokes()),
         updatedAt: Date.now(),
       });
@@ -102,21 +106,29 @@ export default function App() {
 
   // ---- ink engine ------------------------------------------------------------
 
-  const handleEngineReady = useCallback((engine: InkEngine) => {
-    engineRef.current = engine;
-    const saved = loadLesson();
-    if (saved) {
-      setTitle(saved.title);
-      setBackground(saved.background);
-      setTool(saved.tool);
-      setColor(saved.color);
-      setWidth(saved.width);
-      setCameraLayout(saved.cameraLayout);
-      cameraLayoutRef.current = saved.cameraLayout;
-      engine.loadStrokes(saved.strokes);
-      setHasInk(saved.strokes.length > 0);
-    }
-  }, []);
+  const handleEngineReady = useCallback(
+    (engine: InkEngine, viewport: Viewport) => {
+      engineRef.current = engine;
+      viewportRef.current = viewport;
+      const saved = loadLesson();
+      if (saved) {
+        setTitle(saved.title);
+        setBackground(saved.background);
+        setTool(saved.tool);
+        setColor(saved.color);
+        setWidth(saved.width);
+        setCameraLayout(saved.cameraLayout);
+        cameraLayoutRef.current = saved.cameraLayout;
+        viewport.set(saved.viewport);
+        engine.loadStrokes(saved.strokes);
+        setHasInk(saved.strokes.length > 0);
+      }
+      // Where you are on the board is part of the lesson — persist pans/zooms
+      // through the same debounced autosave.
+      viewport.onChange(() => scheduleSave());
+    },
+    [scheduleSave],
+  );
 
   const handleHistoryChange = useCallback((undo: boolean, redo: boolean) => {
     setHistory({ undo, redo });
@@ -153,6 +165,7 @@ export default function App() {
       getBackground: () => stateRef.current.background,
       getInkCanvas: () => engineRef.current?.getInkCanvas() ?? null,
       getActiveStroke: () => engineRef.current?.getActiveStroke() ?? null,
+      getViewport: () => viewportRef.current?.get() ?? { ...DEFAULT_VIEWPORT },
       getVideo: () =>
         stateRef.current.cameraEnabled && stateRef.current.cameraVisible
           ? videoElRef.current
@@ -264,6 +277,12 @@ export default function App() {
         return;
       }
       if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.code === 'Space') {
+        // Held spacebar pans with any pointer, like design tools.
+        e.preventDefault();
+        if (!e.repeat) engineRef.current?.setSpacePan(true);
+        return;
+      }
       switch (key) {
         case 'p':
           setTool('pen');
@@ -273,6 +292,9 @@ export default function App() {
           break;
         case 'e':
           setTool('eraser');
+          break;
+        case 'v':
+          setTool('hand');
           break;
         case 'z':
           if (e.shiftKey) engineRef.current?.redo();
@@ -284,10 +306,28 @@ export default function App() {
         case 'm':
           keyActionsRef.current.mic();
           break;
+        case '0': {
+          // Back to 100% zoom, keeping the stage center fixed.
+          const viewport = viewportRef.current;
+          if (viewport) {
+            viewport.zoomAt(
+              { x: STAGE_WIDTH / 2, y: STAGE_HEIGHT / 2 },
+              1 / viewport.get().zoom,
+            );
+          }
+          break;
+        }
       }
     };
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.code === 'Space') engineRef.current?.setSpacePan(false);
+    };
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    window.addEventListener('keyup', onKeyUp);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('keyup', onKeyUp);
+    };
   }, []);
 
   // ---- render -----------------------------------------------------------------

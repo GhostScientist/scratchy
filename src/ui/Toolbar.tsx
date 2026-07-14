@@ -5,6 +5,7 @@ import {
   PenIcon,
   HighlighterIcon,
   EraserIcon,
+  HandIcon,
   UndoIcon,
   RedoIcon,
   TrashIcon,
@@ -38,6 +39,7 @@ const TOOLS: { tool: Tool; label: string; keyHint: string; Icon: typeof PenIcon 
   { tool: 'pen', label: 'Pen', keyHint: 'P', Icon: PenIcon },
   { tool: 'highlighter', label: 'Highlighter', keyHint: 'H', Icon: HighlighterIcon },
   { tool: 'eraser', label: 'Eraser', keyHint: 'E', Icon: EraserIcon },
+  { tool: 'hand', label: 'Move around', keyHint: 'V', Icon: HandIcon },
 ];
 
 export function Toolbar(props: ToolbarProps) {

@@ -373,6 +373,14 @@ button:disabled {
   cursor: none;
 }
 
+.stage.tool-hand .stage-input {
+  cursor: grab;
+}
+
+.stage.tool-hand .stage-input:active {
+  cursor: grabbing;
+}
+
 .empty-hint {
   position: absolute;
   inset: 0;

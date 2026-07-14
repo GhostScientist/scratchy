@@ -46,6 +46,17 @@ export function EraserIcon() {
   );
 }
 
+export function HandIcon() {
+  return (
+    <Svg>
+      <path d="M8.5 11.5V5.8a1.4 1.4 0 0 1 2.8 0v4.7" />
+      <path d="M11.3 10.5V4.4a1.4 1.4 0 0 1 2.8 0v6.1" />
+      <path d="M14.1 10.5V5.6a1.4 1.4 0 0 1 2.8 0v7.9" />
+      <path d="M8.5 11.5l-1.6-1.6a1.5 1.5 0 0 0-2.2 2l3.8 5.6A5.6 5.6 0 0 0 13.2 20h.2a5.6 5.6 0 0 0 5.5-5.6v-.9" />
+    </Svg>
+  );
+}
+
 export function UndoIcon() {
   return (
     <Svg>
