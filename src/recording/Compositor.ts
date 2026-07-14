@@ -1,17 +1,18 @@
 import { drawBackground } from '../lib/backgrounds';
-import { drawStroke } from '../lib/strokes';
+import { drawElement } from '../lib/elements';
 import { drawLaserTrail } from '../lib/laser';
 import type { LaserPoint } from '../lib/laser';
 import { coverCrop, cameraClipPath } from '../lib/geometry';
 import { BACKING_SCALE } from '../types';
-import type { BackgroundKind, CameraLayout, Stroke, ViewportState } from '../types';
+import type { BackgroundKind, BoardElement, CameraLayout, ViewportState } from '../types';
 import { effectiveView, outputCrop } from './presets';
 import type { OutputCrop, RecordingPreset } from './presets';
 
 export interface CompositorSources {
   getBackground(): BackgroundKind;
   getInkCanvas(): HTMLCanvasElement | null;
-  getActiveStroke(): Stroke | null;
+  /** Stroke or shape currently being drawn; null between gestures. */
+  getActiveElement(): BoardElement | null;
   /** Current view onto the infinite world — the recording follows it. */
   getViewport(): ViewportState;
   /** Fading laser-pointer trail; empty when the laser is idle. */
@@ -108,11 +109,11 @@ export class Compositor {
       );
     }
 
-    const active = this.sources.getActiveStroke();
+    const active = this.sources.getActiveElement();
     if (active) {
       ctx.save();
       ctx.setTransform(eff.zoom, 0, 0, eff.zoom, -eff.x * eff.zoom, -eff.y * eff.zoom);
-      drawStroke(ctx, active);
+      drawElement(ctx, active);
       ctx.restore();
     }
 

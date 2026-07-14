@@ -236,6 +236,59 @@ export function ImageIcon() {
   );
 }
 
+export function TextIcon() {
+  return (
+    <Svg>
+      <path d="M5 6.5V4.5h14v2M12 4.5v15M9.5 19.5h5" />
+    </Svg>
+  );
+}
+
+export function SelectIcon() {
+  return (
+    <Svg>
+      <path d="M13.5 13.5l6 2.2-2.6 1.2 2 3-1.8 1.1-2-3-2 2z" />
+      <path
+        d="M12 4a8 8 0 1 0-1 15.7"
+        strokeDasharray="3 3"
+      />
+    </Svg>
+  );
+}
+
+export function ShapeRectToolIcon() {
+  return (
+    <Svg>
+      <rect x="4" y="6" width="16" height="12" rx="1" />
+    </Svg>
+  );
+}
+
+export function ShapeEllipseToolIcon() {
+  return (
+    <Svg>
+      <ellipse cx="12" cy="12" rx="8" ry="6" />
+    </Svg>
+  );
+}
+
+export function ShapeLineToolIcon() {
+  return (
+    <Svg>
+      <path d="M5 19L19 5" />
+    </Svg>
+  );
+}
+
+export function ShapeArrowToolIcon() {
+  return (
+    <Svg>
+      <path d="M5 19L19 5" />
+      <path d="M11.5 5H19v7.5" />
+    </Svg>
+  );
+}
+
 export function PauseIcon() {
   return (
     <Svg>

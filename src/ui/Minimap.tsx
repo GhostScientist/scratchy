@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import type { InkEngine } from '../ink/InkEngine';
 import type { Viewport } from '../ink/Viewport';
-import { strokeBBox } from '../lib/strokes';
+import { elementBBox } from '../lib/elements';
 import { BACKGROUNDS } from '../lib/backgrounds';
 import type { BackgroundKind } from '../types';
 
@@ -61,21 +61,33 @@ export function Minimap({ engine, viewport, background, revision }: MinimapProps
     const mapX = (wx: number) => wx * scale + ox;
     const mapY = (wy: number) => wy * scale + oy;
 
-    // Ink as simplified polylines.
+    // Content as simplified marks: strokes become polylines, shapes and text
+    // become bbox outlines — the minimap is a sketch, not a render.
     ctx.lineWidth = 1;
     ctx.lineCap = 'round';
-    for (const stroke of engine.getStrokes()) {
-      const pts = stroke.points;
-      const box = strokeBBox(stroke);
-      // Sub-pixel strokes: a dot is cheaper and reads better.
+    for (const el of engine.getElements()) {
+      const box = elementBBox(el);
+      // Sub-pixel elements: a dot is cheaper and reads better.
       if ((box.maxX - box.minX) * scale < 1.5 && (box.maxY - box.minY) * scale < 1.5) {
-        ctx.fillStyle = stroke.color;
+        ctx.fillStyle = el.color;
         ctx.globalAlpha = 0.9;
         ctx.fillRect(mapX(box.minX) - 0.75, mapY(box.minY) - 0.75, 1.5, 1.5);
         continue;
       }
-      ctx.strokeStyle = stroke.color;
-      ctx.globalAlpha = stroke.opacity * 0.9;
+      if (el.kind !== 'stroke') {
+        ctx.strokeStyle = el.color;
+        ctx.globalAlpha = ('opacity' in el ? el.opacity : 1) * 0.9;
+        ctx.strokeRect(
+          mapX(box.minX),
+          mapY(box.minY),
+          (box.maxX - box.minX) * scale,
+          (box.maxY - box.minY) * scale,
+        );
+        continue;
+      }
+      const pts = el.points;
+      ctx.strokeStyle = el.color;
+      ctx.globalAlpha = el.opacity * 0.9;
       ctx.beginPath();
       const stride = Math.max(1, Math.floor(pts.length / MAX_POINTS));
       ctx.moveTo(mapX(pts[0].x), mapY(pts[0].y));

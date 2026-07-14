@@ -1,9 +1,9 @@
 import { drawBackground } from '../lib/backgrounds';
-import { drawStroke, strokeBBox } from '../lib/strokes';
+import { drawElement, elementBBox, elementVisualPad } from '../lib/elements';
 import type { InkEngine } from '../ink/InkEngine';
 import type { Viewport } from '../ink/Viewport';
 import { STAGE_WIDTH, STAGE_HEIGHT } from '../types';
-import type { BackgroundKind, Stroke, ViewportState } from '../types';
+import type { BackgroundKind, BoardElement, ViewportState } from '../types';
 
 /** Longest edge of a whole-board export, so huge boards can't OOM a tab. */
 const MAX_EDGE = 4096;
@@ -15,7 +15,7 @@ const BOARD_PADDING = 60; // world px around the ink
  * stage px and outScale multiplies it into device px.
  */
 async function renderPng(
-  strokes: readonly Stroke[],
+  elements: readonly BoardElement[],
   background: BackgroundKind,
   view: ViewportState,
   outW: number,
@@ -37,9 +37,9 @@ async function renderPng(
   const minY = view.y;
   const maxX = view.x + outW / view.zoom;
   const maxY = view.y + outH / view.zoom;
-  for (const stroke of strokes) {
-    const box = strokeBBox(stroke);
-    const pad = stroke.baseWidth * (stroke.tool === 'highlighter' ? 2.4 : 1);
+  for (const el of elements) {
+    const box = elementBBox(el);
+    const pad = elementVisualPad(el);
     if (
       box.maxX + pad < minX ||
       box.minX - pad > maxX ||
@@ -48,7 +48,7 @@ async function renderPng(
     ) {
       continue;
     }
-    drawStroke(ctx, stroke, true);
+    drawElement(ctx, el, true);
   }
 
   return new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));

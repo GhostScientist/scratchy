@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { StageCanvas } from './ink/StageCanvas';
-import type { InkEngine } from './ink/InkEngine';
+import type { InkEngine, TextEditRequest } from './ink/InkEngine';
+import { TextEditorOverlay } from './ui/TextEditorOverlay';
 import type { Viewport } from './ink/Viewport';
 import { CameraOverlay } from './media/CameraOverlay';
 import { useCamera } from './media/useCamera';
@@ -53,7 +54,7 @@ import {
   cameraAspectFor,
   nextId,
 } from './types';
-import type { BackgroundKind, CameraLayout, CameraShape, Tool } from './types';
+import type { BackgroundKind, CameraLayout, CameraShape, ShapeKind, Tool } from './types';
 
 interface Toast {
   id: number;
@@ -64,6 +65,9 @@ export default function App() {
   const [tool, setTool] = useState<Tool>('pen');
   const [color, setColor] = useState('#1d1f24');
   const [width, setWidth] = useState(4);
+  const [shapeKind, setShapeKind] = useState<ShapeKind>('rect');
+  // Open DOM text editor (new text or an existing element being edited).
+  const [textEdit, setTextEdit] = useState<TextEditRequest | null>(null);
   const [background, setBackground] = useState<BackgroundKind>('white');
   const [title, setTitle] = useState('Untitled lesson');
   const [collapsed, setCollapsed] = useState(false);
@@ -178,7 +182,7 @@ export default function App() {
       if (storageModeRef.current === 'idb') {
         if (!boardId) return Promise.resolve();
         saveChainRef.current = saveChainRef.current.then(async () => {
-          const ok = await saveBoard({ ...lesson, version: 3, id: boardId });
+          const ok = await saveBoard({ ...lesson, version: 4, id: boardId });
           if (!ok) warnSaveFailed();
         });
         setBoards((prev) => {
@@ -272,6 +276,56 @@ export default function App() {
     setInkRevision((r) => r + 1);
     scheduleSave();
   }, [scheduleSave]);
+
+  // ---- text tool ----------------------------------------------------------
+
+  // Ref mirror so commit/cancel run their engine side effects exactly once —
+  // React StrictMode double-invokes setState updaters, so side effects can't
+  // live inside them.
+  const textEditRef = useRef<TextEditRequest | null>(null);
+
+  const handleTextEdit = useCallback((request: TextEditRequest) => {
+    // A tap while an editor is open only blurs it (the blur commits) —
+    // pointerdown reaches the canvas before blur fires, so ignore it here.
+    if (textEditRef.current) return;
+    // Hide the committed element while the DOM editor covers it.
+    if (request.element) engineRef.current?.setHiddenElementId(request.element.id);
+    textEditRef.current = request;
+    setTextEdit(request);
+  }, []);
+
+  const textDefaults = useRef({ color, width });
+  textDefaults.current = { color, width };
+
+  const commitText = useCallback((value: string) => {
+    const engine = engineRef.current;
+    const current = textEditRef.current;
+    if (!engine || !current) return;
+    textEditRef.current = null;
+    engine.setHiddenElementId(null);
+    if (current.element) {
+      engine.updateTextElement(current.element.id, value);
+    } else if (value.trim() !== '') {
+      engine.addTextElement({
+        kind: 'text',
+        id: nextId('tx'),
+        x: current.world.x,
+        y: current.world.y,
+        text: value,
+        color: textDefaults.current.color,
+        // Width steps (2/4/7/12) map onto readable world-space type sizes.
+        fontSize: textDefaults.current.width * 8,
+      });
+    }
+    setTextEdit(null);
+  }, []);
+
+  const cancelText = useCallback(() => {
+    if (!textEditRef.current) return;
+    textEditRef.current = null;
+    engineRef.current?.setHiddenElementId(null);
+    setTextEdit(null);
+  }, []);
 
   // ---- boards ----------------------------------------------------------------
 
@@ -418,7 +472,7 @@ export default function App() {
     () => ({
       getBackground: () => stateRef.current.background,
       getInkCanvas: () => engineRef.current?.getInkCanvas() ?? null,
-      getActiveStroke: () => engineRef.current?.getActiveStroke() ?? null,
+      getActiveElement: () => engineRef.current?.getActiveElement() ?? null,
       getViewport: () => viewportRef.current?.get() ?? { ...DEFAULT_VIEWPORT },
       getLaserTrail: () => engineRef.current?.getLaserTrail() ?? [],
       getVideo: () =>
@@ -756,6 +810,19 @@ export default function App() {
         case 'l':
           setTool('laser');
           break;
+        case 'r':
+          setTool('shape');
+          break;
+        case 't':
+          setTool('text');
+          break;
+        case 's':
+          setTool('select');
+          break;
+        case 'delete':
+        case 'backspace':
+          engineRef.current?.deleteSelection();
+          break;
         case 'z':
           if (e.shiftKey) engineRef.current?.redo();
           else engineRef.current?.undo();
@@ -870,10 +937,23 @@ export default function App() {
               tool={tool}
               color={color}
               width={width}
+              shapeKind={shapeKind}
               onReady={handleEngineReady}
               onHistoryChange={handleHistoryChange}
               onCommit={handleCommit}
+              onTextEdit={handleTextEdit}
             />
+            {textEdit && nav && (
+              <TextEditorOverlay
+                key={textEdit.element?.id ?? `${textEdit.world.x},${textEdit.world.y}`}
+                request={textEdit}
+                viewport={nav.viewport}
+                color={color}
+                fontSize={width * 8}
+                onCommit={commitText}
+                onCancel={cancelText}
+              />
+            )}
             {camera.stream && cameraVisible && (
               <CameraOverlay
                 stream={camera.stream}
@@ -929,6 +1009,7 @@ export default function App() {
           color={color}
           width={width}
           background={background}
+          shapeKind={shapeKind}
           canUndo={history.undo}
           canRedo={history.redo}
           collapsed={collapsed}
@@ -936,6 +1017,7 @@ export default function App() {
           onColor={setColor}
           onWidth={setWidth}
           onBackground={setBackground}
+          onShapeKind={setShapeKind}
           onUndo={() => engineRef.current?.undo()}
           onRedo={() => engineRef.current?.redo()}
           onClear={() => engineRef.current?.clear()}

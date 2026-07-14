@@ -1,18 +1,21 @@
 import { useEffect, useRef } from 'react';
 import { InkEngine } from './InkEngine';
+import type { TextEditRequest } from './InkEngine';
 import { Viewport } from './Viewport';
 import { drawBackground } from '../lib/backgrounds';
 import { STAGE_WIDTH, STAGE_HEIGHT, BACKING_SCALE } from '../types';
-import type { BackgroundKind, Tool } from '../types';
+import type { BackgroundKind, ShapeKind, Tool } from '../types';
 
 interface StageCanvasProps {
   background: BackgroundKind;
   tool: Tool;
   color: string;
   width: number;
+  shapeKind: ShapeKind;
   onReady(engine: InkEngine, viewport: Viewport): void;
   onHistoryChange(canUndo: boolean, canRedo: boolean): void;
   onCommit(): void;
+  onTextEdit(request: TextEditRequest): void;
 }
 
 export function StageCanvas(props: StageCanvasProps) {
@@ -28,11 +31,13 @@ export function StageCanvas(props: StageCanvasProps) {
     onReady: props.onReady,
     onHistoryChange: props.onHistoryChange,
     onCommit: props.onCommit,
+    onTextEdit: props.onTextEdit,
   });
   cbRef.current = {
     onReady: props.onReady,
     onHistoryChange: props.onHistoryChange,
     onCommit: props.onCommit,
+    onTextEdit: props.onTextEdit,
   };
 
   const redrawBackground = () => {
@@ -59,6 +64,7 @@ export function StageCanvas(props: StageCanvasProps) {
     const engine = new InkEngine(inkRef.current!, activeRef.current!, viewport, {
       onHistoryChange: (u, r) => cbRef.current.onHistoryChange(u, r),
       onCommit: () => cbRef.current.onCommit(),
+      onTextEdit: (req) => cbRef.current.onTextEdit(req),
     });
     engineRef.current = engine;
     viewportRef.current = viewport;
@@ -92,6 +98,10 @@ export function StageCanvas(props: StageCanvasProps) {
   useEffect(() => {
     engineRef.current?.setBrush(props.tool, props.color, props.width);
   }, [props.tool, props.color, props.width]);
+
+  useEffect(() => {
+    engineRef.current?.setShapeKind(props.shapeKind);
+  }, [props.shapeKind]);
 
   useEffect(() => {
     bgKindRef.current = props.background;

@@ -1,5 +1,5 @@
 import { DEFAULT_VIEWPORT } from '../types';
-import type { BackgroundKind, CameraLayout, Stroke, Tool, ViewportState } from '../types';
+import type { BackgroundKind, BoardElement, CameraLayout, Tool, ViewportState } from '../types';
 
 const KEY_V2 = 'scratchy.lesson.v2';
 const KEY_V1 = 'scratchy.lesson.v1';
@@ -13,7 +13,9 @@ export interface SavedLesson {
   width: number;
   cameraLayout: CameraLayout;
   viewport: ViewportState;
-  strokes: Stroke[];
+  /** Board content. The field name predates shapes/text; loaders normalize
+   *  entries without a `kind` to strokes. */
+  strokes: BoardElement[];
   updatedAt: number;
 }
 
@@ -24,16 +26,21 @@ interface SavedLessonV1 extends Omit<SavedLesson, 'version' | 'viewport'> {
 
 const round1 = (n: number) => Math.round(n * 10) / 10;
 
-/** Shrink stroke payloads before persisting — coordinates to 0.1 world px. */
-export function compactStrokes(strokes: readonly Stroke[]): Stroke[] {
-  return strokes.map((s) => ({
-    ...s,
-    points: s.points.map((p) => ({
-      x: round1(p.x),
-      y: round1(p.y),
-      pressure: Math.round(p.pressure * 1000) / 1000,
-    })),
-  }));
+/** Shrink stroke payloads before persisting — coordinates to 0.1 world px.
+ *  Shapes and text are already tiny and pass through unchanged. */
+export function compactStrokes(elements: readonly BoardElement[]): BoardElement[] {
+  return elements.map((el) =>
+    el.kind === 'stroke'
+      ? {
+          ...el,
+          points: el.points.map((p) => ({
+            x: round1(p.x),
+            y: round1(p.y),
+            pressure: Math.round(p.pressure * 1000) / 1000,
+          })),
+        }
+      : el,
+  );
 }
 
 export function saveLesson(lesson: SavedLesson): boolean {
