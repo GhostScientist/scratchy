@@ -236,6 +236,22 @@ export function ImageIcon() {
   );
 }
 
+export function PauseIcon() {
+  return (
+    <Svg>
+      <path d="M9 5.5v13M15 5.5v13" strokeWidth="2.4" />
+    </Svg>
+  );
+}
+
+export function PlayIcon() {
+  return (
+    <Svg>
+      <path d="M8 5.5l11 6.5-11 6.5z" />
+    </Svg>
+  );
+}
+
 export function GearIcon() {
   return (
     <Svg>

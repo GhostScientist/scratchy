@@ -5,16 +5,19 @@ import { negotiateFormat, extensionFor } from './mime';
 import type { NegotiatedFormat } from './mime';
 import type { Take } from '../types';
 
-export type RecorderPhase = 'idle' | 'countdown' | 'recording' | 'stopping' | 'complete';
+export type RecorderPhase = 'idle' | 'countdown' | 'recording' | 'paused' | 'stopping' | 'complete';
 
 export interface RecorderApi {
   phase: RecorderPhase;
   countdownValue: number;
+  /** Active recording time — paused stretches are excluded. */
   elapsedMs: number;
   take: Take | null;
   error: string | null;
   start(): void;
   cancelCountdown(): void;
+  pause(): void;
+  resume(): void;
   stop(): void;
   /** Revoke the take's object URL and return to idle. */
   closeTake(): void;
@@ -43,7 +46,12 @@ export function useRecorder(
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const formatRef = useRef<NegotiatedFormat | null>(null);
-  const startTimeRef = useRef(0);
+  // Active-time accounting: completed active milliseconds plus the start of
+  // the currently open segment. Pause closes a segment, resume opens one —
+  // so elapsed time never includes paused stretches and can't drift.
+  const activeMsRef = useRef(0);
+  const segmentStartRef = useRef(0);
+  const segmentOpenRef = useRef(false);
   const stoppedElapsedRef = useRef(0);
   const timerRef = useRef(0);
   const countdownTimerRef = useRef(0);
@@ -140,10 +148,12 @@ export function useRecorder(
       recorder.onstop = finalize;
       recorderRef.current = recorder;
       recorder.start(1000);
-      startTimeRef.current = performance.now();
+      activeMsRef.current = 0;
+      segmentStartRef.current = performance.now();
+      segmentOpenRef.current = true;
       setElapsedMs(0);
       timerRef.current = window.setInterval(() => {
-        setElapsedMs(performance.now() - startTimeRef.current);
+        setElapsedMs(activeMsRef.current + (performance.now() - segmentStartRef.current));
       }, 250);
       setPhase('recording');
     } catch (err) {
@@ -187,16 +197,58 @@ export function useRecorder(
     setPhase((current) => (current === 'countdown' ? 'idle' : current));
   }, []);
 
+  const pause = useCallback(() => {
+    const recorder = recorderRef.current;
+    if (!recorder || recorder.state !== 'recording') return;
+    try {
+      // Flush the pending partial chunk so a paused session is fully
+      // persisted up to the pause point.
+      recorder.requestData();
+    } catch {
+      // Nothing to flush.
+    }
+    try {
+      recorder.pause();
+    } catch {
+      return; // Pause unsupported here — leave the recording running.
+    }
+    activeMsRef.current += performance.now() - segmentStartRef.current;
+    segmentOpenRef.current = false;
+    window.clearInterval(timerRef.current);
+    setElapsedMs(activeMsRef.current);
+    setPhase('paused');
+  }, []);
+
+  const resume = useCallback(() => {
+    const recorder = recorderRef.current;
+    if (!recorder || recorder.state !== 'paused') return;
+    try {
+      recorder.resume();
+    } catch {
+      return;
+    }
+    segmentStartRef.current = performance.now();
+    segmentOpenRef.current = true;
+    timerRef.current = window.setInterval(() => {
+      setElapsedMs(activeMsRef.current + (performance.now() - segmentStartRef.current));
+    }, 250);
+    setPhase('recording');
+  }, []);
+
   const stop = useCallback(() => {
     const recorder = recorderRef.current;
     if (!recorder || recorder.state === 'inactive') return;
-    stoppedElapsedRef.current = performance.now() - startTimeRef.current;
+    stoppedElapsedRef.current =
+      activeMsRef.current +
+      (segmentOpenRef.current ? performance.now() - segmentStartRef.current : 0);
+    segmentOpenRef.current = false;
     window.clearInterval(timerRef.current);
     setPhase('stopping');
     try {
       // Flush the pending partial chunk before stopping — Safari can fail
       // to deliver a final dataavailable on mixed canvas+mic streams.
-      if (recorder.state === 'recording') recorder.requestData();
+      // (Valid from both recording and paused states.)
+      recorder.requestData();
     } catch {
       // Nothing to flush; the 1s timeslice chunks are enough.
     }
@@ -240,6 +292,8 @@ export function useRecorder(
     error,
     start,
     cancelCountdown,
+    pause,
+    resume,
     stop,
     closeTake,
     dismissError: useCallback(() => setError(null), []),

@@ -6,6 +6,7 @@ import { CameraOverlay } from './media/CameraOverlay';
 import { useCamera } from './media/useCamera';
 import { useMicrophone } from './media/useMicrophone';
 import { useRecorder } from './recording/useRecorder';
+import type { RecorderPhase } from './recording/useRecorder';
 import type { CompositorSources } from './recording/Compositor';
 import { PreviewModal } from './recording/PreviewModal';
 import { Toolbar } from './ui/Toolbar';
@@ -430,7 +431,19 @@ export default function App() {
   const recordingActive =
     recorder.phase === 'countdown' ||
     recorder.phase === 'recording' ||
+    recorder.phase === 'paused' ||
     recorder.phase === 'stopping';
+
+  // DEV hook so e2e tests can poll the recorder without driving the UI.
+  const recorderApiRef = useRef(recorder);
+  recorderApiRef.current = recorder;
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    (window as unknown as Record<string, unknown>).__scratchyRecorder = {
+      getPhase: () => recorderApiRef.current.phase,
+      getElapsedMs: () => recorderApiRef.current.elapsedMs,
+    };
+  }, []);
 
   const tabHintShown = useRef(false);
   const handleRecord = () => {
@@ -506,8 +519,21 @@ export default function App() {
 
   // ---- keyboard shortcuts ------------------------------------------------------
 
-  const keyActionsRef = useRef({ camera: handleCameraButton, mic: handleMicButton });
-  keyActionsRef.current = { camera: handleCameraButton, mic: handleMicButton };
+  const keyActionsRef = useRef({
+    camera: handleCameraButton,
+    mic: handleMicButton,
+    recorderPhase: recorder.phase as RecorderPhase,
+    pauseResume: () => {},
+  });
+  keyActionsRef.current = {
+    camera: handleCameraButton,
+    mic: handleMicButton,
+    recorderPhase: recorder.phase,
+    pauseResume: () => {
+      if (recorder.phase === 'recording') recorder.pause();
+      else if (recorder.phase === 'paused') recorder.resume();
+    },
+  };
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -527,9 +553,15 @@ export default function App() {
       }
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.code === 'Space') {
-        // Held spacebar pans with any pointer, like design tools.
         e.preventDefault();
-        if (!e.repeat) engineRef.current?.setSpacePan(true);
+        const phase = keyActionsRef.current.recorderPhase;
+        if (phase === 'recording' || phase === 'paused') {
+          // SPEC §12: Space pauses/resumes while recording.
+          if (!e.repeat) keyActionsRef.current.pauseResume();
+        } else if (!e.repeat) {
+          // Held spacebar pans with any pointer, like design tools.
+          engineRef.current?.setSpacePan(true);
+        }
         return;
       }
       switch (key) {
@@ -594,7 +626,9 @@ export default function App() {
     'stage',
     `bg-${background}`,
     `tool-${tool}`,
-    recorder.phase === 'recording' || recorder.phase === 'stopping' ? 'is-recording' : '',
+    recorder.phase === 'recording' || recorder.phase === 'paused' || recorder.phase === 'stopping'
+      ? 'is-recording'
+      : '',
   ]
     .filter(Boolean)
     .join(' ');
@@ -637,6 +671,8 @@ export default function App() {
         onCamera={handleCameraButton}
         phase={recorder.phase}
         elapsedMs={recorder.elapsedMs}
+        onPause={recorder.pause}
+        onResume={recorder.resume}
         onRecord={handleRecord}
         onCancelCountdown={recorder.cancelCountdown}
         onStop={recorder.stop}
