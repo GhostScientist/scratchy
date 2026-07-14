@@ -11,6 +11,8 @@ import { PreviewModal } from './recording/PreviewModal';
 import { Toolbar } from './ui/Toolbar';
 import { TopBar } from './ui/TopBar';
 import { Countdown } from './ui/Countdown';
+import { Minimap } from './ui/Minimap';
+import { ZoomControls, zoomToFit } from './ui/ZoomControls';
 import { loadLesson, saveLesson, compactStrokes } from './persistence/autosave';
 import { clamp } from './lib/geometry';
 import {
@@ -40,6 +42,9 @@ export default function App() {
   const [cameraVisible, setCameraVisible] = useState(true);
   const [scale, setScale] = useState(1);
   const [toasts, setToasts] = useState<Toast[]>([]);
+  // Engine+viewport once the stage mounts, for the navigation-aid components.
+  const [nav, setNav] = useState<{ engine: InkEngine; viewport: Viewport } | null>(null);
+  const [inkRevision, setInkRevision] = useState(0);
 
   const camera = useCamera();
   const mic = useMicrophone();
@@ -126,6 +131,7 @@ export default function App() {
       // Where you are on the board is part of the lesson — persist pans/zooms
       // through the same debounced autosave.
       viewport.onChange(() => scheduleSave());
+      setNav({ engine, viewport });
     },
     [scheduleSave],
   );
@@ -136,6 +142,7 @@ export default function App() {
 
   const handleCommit = useCallback(() => {
     setHasInk(engineRef.current?.hasStrokes() ?? false);
+    setInkRevision((r) => r + 1);
     scheduleSave();
   }, [scheduleSave]);
 
@@ -317,6 +324,12 @@ export default function App() {
           }
           break;
         }
+        case '1': {
+          const engine = engineRef.current;
+          const viewport = viewportRef.current;
+          if (engine && viewport) zoomToFit(engine, viewport);
+          break;
+        }
       }
     };
     const onKeyUp = (e: KeyboardEvent) => {
@@ -398,6 +411,22 @@ export default function App() {
             )}
           </div>
         </div>
+
+        {nav && (
+          <div className="nav-aids">
+            <Minimap
+              engine={nav.engine}
+              viewport={nav.viewport}
+              background={background}
+              revision={inkRevision}
+            />
+            <ZoomControls
+              engine={nav.engine}
+              viewport={nav.viewport}
+              onEmptyFit={() => pushToast('Nothing to fit — the board is empty.')}
+            />
+          </div>
+        )}
 
         <Toolbar
           tool={tool}

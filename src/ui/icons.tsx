@@ -168,6 +168,18 @@ export function MirrorIcon() {
   );
 }
 
+export function FitIcon() {
+  return (
+    <Svg width="16" height="16">
+      <path d="M9 4H5.5A1.5 1.5 0 0 0 4 5.5V9" />
+      <path d="M15 4h3.5A1.5 1.5 0 0 1 20 5.5V9" />
+      <path d="M9 20H5.5A1.5 1.5 0 0 1 4 18.5V15" />
+      <path d="M15 20h3.5a1.5 1.5 0 0 0 1.5-1.5V15" />
+      <rect x="9" y="9.5" width="6" height="5" rx="1" />
+    </Svg>
+  );
+}
+
 export function CloseIcon() {
   return (
     <Svg width="16" height="16">
