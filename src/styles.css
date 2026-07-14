@@ -706,6 +706,66 @@ button:disabled {
   color: var(--text-dim);
 }
 
+/* ---- crash-recovery card ------------------------------------------------ */
+
+.recovery-card {
+  position: fixed;
+  top: 74px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 80;
+  min-width: 380px;
+  max-width: 560px;
+  padding: 16px 18px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: var(--shadow);
+  animation: fade 180ms var(--ease);
+}
+
+.recovery-card h3 {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.recovery-sub {
+  margin: 4px 0 10px;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.recovery-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+}
+
+.recovery-row + .recovery-row {
+  border-top: 1px solid var(--line);
+}
+
+.recovery-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.recovery-info strong {
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recovery-info span {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
 /* ---- navigation aids (never recorded — they live outside the stage) --- */
 
 .nav-aids {

@@ -39,6 +39,10 @@ import { ensureDeviceProfile } from './capability/probe';
 import { loadDeviceProfile } from './capability/profile';
 import type { DeviceProfile } from './capability/profile';
 import { presetById, outputCrop } from './recording/presets';
+import { recoverSessions, assembleSession, deleteSessionById } from './recording/RecordingStore';
+import type { RecoverableSession } from './recording/RecordingStore';
+import { RecoveryCard } from './ui/RecoveryCard';
+import type { Take } from './types';
 import { exportViewPng, exportBoardPng, downloadBlob } from './export/png';
 import { clamp } from './lib/geometry';
 import {
@@ -96,6 +100,13 @@ export default function App() {
   // Capability profile (SPEC §9) — probed lazily before the first recording.
   const [deviceProfile, setDeviceProfile] = useState<DeviceProfile | null>(loadDeviceProfile);
   const [probing, setProbing] = useState(false);
+  // Recording sessions left behind by a crash/reload, offered for recovery.
+  const [recoverable, setRecoverable] = useState<RecoverableSession[]>([]);
+  const [recovered, setRecovered] = useState<{
+    take: Take;
+    sessionId: string;
+    boardId: string | null;
+  } | null>(null);
 
   const camera = useCamera();
   const mic = useMicrophone();
@@ -245,6 +256,8 @@ export default function App() {
         viewport.onChange(() => scheduleSave());
         scheduleSave();
         setNav({ engine, viewport });
+        // Surface recordings interrupted by a crash or reload (SPEC §6.5).
+        void recoverSessions().then(setRecoverable);
       })();
     },
     [applyLesson, scheduleSave],
@@ -423,7 +436,73 @@ export default function App() {
   const getPreset = useCallback(() => presetRef.current, []);
 
   const getMicStream = useCallback(() => micStreamRef.current, []);
-  const recorder = useRecorder(sources, getMicStream, getPreset);
+  const getSessionMeta = useCallback(
+    () => ({ boardId: boardIdRef.current, title: lessonRef.current.title }),
+    [],
+  );
+  const recorder = useRecorder(sources, getMicStream, getPreset, getSessionMeta, pushToast);
+
+  // ---- crash recovery --------------------------------------------------------
+
+  const handleRecoverSession = useCallback(
+    async (session: RecoverableSession) => {
+      setRecoverable((list) => list.filter((s) => s !== session));
+      const blob = await assembleSession(session.manifest.sessionId);
+      if (!blob || blob.size === 0) {
+        pushToast('Could not recover that recording.');
+        void deleteSessionById(session.manifest.sessionId);
+        return;
+      }
+      setRecovered({
+        take: {
+          blob,
+          url: URL.createObjectURL(blob),
+          mimeType: session.manifest.mimeType,
+          extension: session.manifest.extension,
+          durationMs: session.manifest.activeMs,
+          createdAt: session.manifest.startedAt,
+        },
+        sessionId: session.manifest.sessionId,
+        boardId: session.manifest.boardId,
+      });
+    },
+    [pushToast],
+  );
+
+  const handleDiscardSession = useCallback(
+    (session: RecoverableSession) => {
+      setRecoverable((list) => list.filter((s) => s !== session));
+      void deleteSessionById(session.manifest.sessionId);
+      pushToast('Recording discarded.');
+    },
+    [pushToast],
+  );
+
+  const closeRecovered = useCallback(() => {
+    setRecovered((current) => {
+      if (current) {
+        URL.revokeObjectURL(current.take.url);
+        void deleteSessionById(current.sessionId);
+      }
+      return null;
+    });
+  }, []);
+
+  const handleSaveRecovered = useCallback(async (): Promise<boolean> => {
+    if (!recovered) return false;
+    const boardId = recovered.boardId ?? boardIdRef.current;
+    if (!boardId) return false;
+    return saveTake({
+      id: nextId('t'),
+      boardId,
+      title: lessonRef.current.title,
+      blob: recovered.take.blob,
+      mimeType: recovered.take.mimeType,
+      extension: recovered.take.extension,
+      durationMs: recovered.take.durationMs,
+      createdAt: recovered.take.createdAt,
+    });
+  }, [recovered]);
 
   const recorderTake = recorder.take;
   const handleSaveTake = useCallback(async (): Promise<boolean> => {
@@ -477,6 +556,15 @@ export default function App() {
         presetRef.current = presetById('compat');
         updateSettings({ presetId: 'compat' });
         pushToast('Dropped to 720p — this device failed the 1080p performance check.');
+      }
+      // SPEC §6.6: check storage headroom before recording, warn — don't block.
+      try {
+        const est = await navigator.storage?.estimate?.();
+        if (est?.quota && est.quota - (est.usage ?? 0) < 200 * 1024 * 1024) {
+          pushToast('Device storage is low — long recordings may not save.');
+        }
+      } catch {
+        // Estimate is a nicety only.
       }
       if (!mic.enabled) {
         pushToast('Recording without microphone — tap the mic to add your voice.');
@@ -866,6 +954,28 @@ export default function App() {
             pushToast('Take deleted.');
           }}
           onSaveToLibrary={activeBoardId ? handleSaveTake : undefined}
+        />
+      )}
+
+      {recoverable.length > 0 && recorder.phase === 'idle' && !recovered && (
+        <RecoveryCard
+          sessions={recoverable}
+          onRecover={(s) => void handleRecoverSession(s)}
+          onDiscard={handleDiscardSession}
+        />
+      )}
+
+      {recovered && (
+        <PreviewModal
+          take={recovered.take}
+          title={title}
+          onTitle={setTitle}
+          onClose={closeRecovered}
+          onDelete={() => {
+            closeRecovered();
+            pushToast('Recording discarded.');
+          }}
+          onSaveToLibrary={activeBoardId || recovered.boardId ? handleSaveRecovered : undefined}
         />
       )}
 
