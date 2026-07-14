@@ -14,6 +14,22 @@ import { Countdown } from './ui/Countdown';
 import { Minimap } from './ui/Minimap';
 import { ZoomControls, zoomToFit } from './ui/ZoomControls';
 import { loadLesson, saveLesson, compactStrokes } from './persistence/autosave';
+import type { SavedLesson } from './persistence/autosave';
+import {
+  initBoards,
+  saveBoard,
+  loadBoard,
+  listBoards,
+  createBoard,
+  deleteBoard,
+  setActiveBoard,
+  saveTake,
+  listTakes,
+  deleteTake,
+} from './persistence/boards';
+import type { BoardMeta, StoredTake } from './persistence/boards';
+import { BoardsMenu } from './ui/BoardsMenu';
+import { TakesDrawer } from './ui/TakesDrawer';
 import { clamp } from './lib/geometry';
 import {
   STAGE_WIDTH,
@@ -21,6 +37,7 @@ import {
   DEFAULT_CAMERA_LAYOUT,
   DEFAULT_VIEWPORT,
   cameraAspectFor,
+  nextId,
 } from './types';
 import type { BackgroundKind, CameraLayout, CameraShape, Tool } from './types';
 
@@ -45,6 +62,15 @@ export default function App() {
   // Engine+viewport once the stage mounts, for the navigation-aid components.
   const [nav, setNav] = useState<{ engine: InkEngine; viewport: Viewport } | null>(null);
   const [inkRevision, setInkRevision] = useState(0);
+  // Multi-board state; activeBoardId stays null when IndexedDB is unavailable
+  // and the app runs on the single-lesson localStorage fallback.
+  const [boards, setBoards] = useState<BoardMeta[]>([]);
+  const [activeBoardId, setActiveBoardId] = useState<string | null>(null);
+  const [takesOpen, setTakesOpen] = useState(false);
+  const [takes, setTakes] = useState<StoredTake[]>([]);
+  const [storageEstimate, setStorageEstimate] = useState<{ usage: number; quota: number } | null>(
+    null,
+  );
 
   const camera = useCamera();
   const mic = useMicrophone();
@@ -83,25 +109,68 @@ export default function App() {
 
   const saveTimer = useRef(0);
   const quotaWarned = useRef(false);
+  // 'idb' once initBoards succeeds; 'local' is the single-lesson fallback.
+  const storageModeRef = useRef<'local' | 'idb'>('local');
+  const storageReadyRef = useRef(false);
+  const boardIdRef = useRef<string | null>(null);
+  // Serializes IDB writes so a slow save can never land after a newer one.
+  const saveChainRef = useRef<Promise<void>>(Promise.resolve());
+
+  const snapshotLesson = useCallback(
+    (): Omit<SavedLesson, 'version'> => ({
+      ...lessonRef.current,
+      cameraLayout: cameraLayoutRef.current,
+      viewport: viewportRef.current?.get() ?? { ...DEFAULT_VIEWPORT },
+      strokes: compactStrokes(engineRef.current?.getStrokes() ?? []),
+      updatedAt: Date.now(),
+    }),
+    [],
+  );
+
+  const warnSaveFailed = useCallback(() => {
+    if (quotaWarned.current) return;
+    quotaWarned.current = true;
+    pushToast('Autosave paused — device storage may be full.');
+  }, [pushToast]);
+
+  /** Persist the current lesson under boardId (captured by the caller when
+   *  the save was scheduled, so a board switch can't cross-save). */
+  const persistNow = useCallback(
+    (boardId: string | null): Promise<void> => {
+      if (!storageReadyRef.current || !engineRef.current) return Promise.resolve();
+      const lesson = snapshotLesson();
+      if (storageModeRef.current === 'idb') {
+        if (!boardId) return Promise.resolve();
+        saveChainRef.current = saveChainRef.current.then(async () => {
+          const ok = await saveBoard({ ...lesson, version: 3, id: boardId });
+          if (!ok) warnSaveFailed();
+        });
+        setBoards((prev) => {
+          const meta: BoardMeta = {
+            id: boardId,
+            title: lesson.title,
+            updatedAt: lesson.updatedAt,
+            strokeCount: lesson.strokes.length,
+          };
+          return [meta, ...prev.filter((m) => m.id !== boardId)].sort(
+            (a, b) => b.updatedAt - a.updatedAt,
+          );
+        });
+        return saveChainRef.current;
+      }
+      if (!saveLesson({ version: 2, ...lesson })) warnSaveFailed();
+      return Promise.resolve();
+    },
+    [snapshotLesson, warnSaveFailed],
+  );
+
   const scheduleSave = useCallback(() => {
+    const boardId = boardIdRef.current;
     window.clearTimeout(saveTimer.current);
     saveTimer.current = window.setTimeout(() => {
-      const engine = engineRef.current;
-      if (!engine) return;
-      const ok = saveLesson({
-        version: 2,
-        ...lessonRef.current,
-        cameraLayout: cameraLayoutRef.current,
-        viewport: viewportRef.current?.get() ?? { ...DEFAULT_VIEWPORT },
-        strokes: compactStrokes(engine.getStrokes()),
-        updatedAt: Date.now(),
-      });
-      if (!ok && !quotaWarned.current) {
-        quotaWarned.current = true;
-        pushToast('Autosave paused — local storage is full.');
-      }
+      void persistNow(boardId);
     }, 600);
-  }, [pushToast]);
+  }, [persistNow]);
 
   useEffect(() => {
     scheduleSave();
@@ -111,29 +180,49 @@ export default function App() {
 
   // ---- ink engine ------------------------------------------------------------
 
+  const applyLesson = useCallback(
+    (saved: Omit<SavedLesson, 'version'>, engine: InkEngine, viewport: Viewport) => {
+      setTitle(saved.title);
+      setBackground(saved.background);
+      setTool(saved.tool);
+      setColor(saved.color);
+      setWidth(saved.width);
+      setCameraLayout(saved.cameraLayout);
+      cameraLayoutRef.current = saved.cameraLayout;
+      viewport.set(saved.viewport);
+      engine.loadStrokes(saved.strokes);
+      setHasInk(saved.strokes.length > 0);
+      setInkRevision((r) => r + 1);
+    },
+    [],
+  );
+
   const handleEngineReady = useCallback(
     (engine: InkEngine, viewport: Viewport) => {
       engineRef.current = engine;
       viewportRef.current = viewport;
-      const saved = loadLesson();
-      if (saved) {
-        setTitle(saved.title);
-        setBackground(saved.background);
-        setTool(saved.tool);
-        setColor(saved.color);
-        setWidth(saved.width);
-        setCameraLayout(saved.cameraLayout);
-        cameraLayoutRef.current = saved.cameraLayout;
-        viewport.set(saved.viewport);
-        engine.loadStrokes(saved.strokes);
-        setHasInk(saved.strokes.length > 0);
-      }
-      // Where you are on the board is part of the lesson — persist pans/zooms
-      // through the same debounced autosave.
-      viewport.onChange(() => scheduleSave());
-      setNav({ engine, viewport });
+      void (async () => {
+        const init = await initBoards();
+        if (init) {
+          storageModeRef.current = 'idb';
+          boardIdRef.current = init.board.id;
+          setActiveBoardId(init.board.id);
+          setBoards(init.boards);
+          applyLesson(init.board, engine, viewport);
+        } else {
+          // IndexedDB unavailable — single-lesson localStorage, as before.
+          const saved = loadLesson();
+          if (saved) applyLesson(saved, engine, viewport);
+        }
+        storageReadyRef.current = true;
+        // Where you are on the board is part of the lesson — persist
+        // pans/zooms through the same debounced autosave.
+        viewport.onChange(() => scheduleSave());
+        scheduleSave();
+        setNav({ engine, viewport });
+      })();
     },
-    [scheduleSave],
+    [applyLesson, scheduleSave],
   );
 
   const handleHistoryChange = useCallback((undo: boolean, redo: boolean) => {
@@ -145,6 +234,100 @@ export default function App() {
     setInkRevision((r) => r + 1);
     scheduleSave();
   }, [scheduleSave]);
+
+  // ---- boards ----------------------------------------------------------------
+
+  const openBoard = useCallback(
+    async (id: string, { saveCurrent }: { saveCurrent: boolean }) => {
+      const engine = engineRef.current;
+      const viewport = viewportRef.current;
+      if (!engine || !viewport) return;
+      window.clearTimeout(saveTimer.current);
+      if (saveCurrent) await persistNow(boardIdRef.current);
+      const board = await loadBoard(id);
+      if (!board) {
+        pushToast('Could not open that board.');
+        return;
+      }
+      boardIdRef.current = board.id;
+      setActiveBoardId(board.id);
+      applyLesson(board, engine, viewport);
+      void setActiveBoard(board.id);
+      setBoards(await listBoards());
+    },
+    [applyLesson, persistNow, pushToast],
+  );
+
+  const handleSwitchBoard = useCallback(
+    (id: string) => {
+      if (id === boardIdRef.current) return;
+      void openBoard(id, { saveCurrent: true });
+    },
+    [openBoard],
+  );
+
+  const handleCreateBoard = useCallback(async () => {
+    window.clearTimeout(saveTimer.current);
+    await persistNow(boardIdRef.current);
+    const board = await createBoard();
+    if (!board) {
+      pushToast('Could not create a board.');
+      return;
+    }
+    await openBoard(board.id, { saveCurrent: false });
+  }, [openBoard, persistNow, pushToast]);
+
+  const handleDeleteBoard = useCallback(
+    async (id: string) => {
+      const wasActive = id === boardIdRef.current;
+      if (wasActive) {
+        // Never re-save a board that is being deleted: kill the pending
+        // debounce and detach the id so later flushes become no-ops.
+        window.clearTimeout(saveTimer.current);
+        boardIdRef.current = null;
+      }
+      await deleteBoard(id);
+      if (!wasActive) {
+        setBoards(await listBoards());
+        return;
+      }
+      const remaining = await listBoards();
+      if (remaining.length > 0) {
+        await openBoard(remaining[0].id, { saveCurrent: false });
+      } else {
+        await handleCreateBoard();
+      }
+      pushToast('Board deleted.');
+    },
+    [handleCreateBoard, openBoard, pushToast],
+  );
+
+  // ---- takes library -----------------------------------------------------------
+
+  const refreshTakes = useCallback(async () => {
+    const id = boardIdRef.current;
+    if (!id) return;
+    setTakes(await listTakes(id));
+    try {
+      const est = await navigator.storage?.estimate?.();
+      if (est) setStorageEstimate({ usage: est.usage ?? 0, quota: est.quota ?? 0 });
+    } catch {
+      // Estimate is a nicety only.
+    }
+  }, []);
+
+  const handleOpenTakes = useCallback(() => {
+    setTakesOpen(true);
+    void refreshTakes();
+  }, [refreshTakes]);
+
+  const handleDeleteTake = useCallback(
+    async (id: string) => {
+      await deleteTake(id);
+      void refreshTakes();
+    },
+    [refreshTakes],
+  );
 
   // ---- stage scaling -----------------------------------------------------------
 
@@ -185,6 +368,22 @@ export default function App() {
 
   const getMicStream = useCallback(() => micStreamRef.current, []);
   const recorder = useRecorder(sources, getMicStream);
+
+  const recorderTake = recorder.take;
+  const handleSaveTake = useCallback(async (): Promise<boolean> => {
+    const boardId = boardIdRef.current;
+    if (!recorderTake || !boardId) return false;
+    return saveTake({
+      id: nextId('t'),
+      boardId,
+      title: lessonRef.current.title,
+      blob: recorderTake.blob,
+      mimeType: recorderTake.mimeType,
+      extension: recorderTake.extension,
+      durationMs: recorderTake.durationMs,
+      createdAt: recorderTake.createdAt,
+    });
+  }, [recorderTake]);
 
   const recordingActive =
     recorder.phase === 'countdown' ||
@@ -363,6 +562,19 @@ export default function App() {
       <TopBar
         title={title}
         onTitle={setTitle}
+        boardsSlot={
+          activeBoardId && (
+            <BoardsMenu
+              boards={boards}
+              activeBoardId={activeBoardId}
+              disabled={recordingActive}
+              onSwitch={handleSwitchBoard}
+              onCreate={() => void handleCreateBoard()}
+              onDelete={(id) => void handleDeleteBoard(id)}
+            />
+          )
+        }
+        onLibrary={activeBoardId ? handleOpenTakes : undefined}
         micEnabled={mic.enabled}
         micMuted={mic.muted}
         onMic={handleMicButton}
@@ -461,6 +673,16 @@ export default function App() {
             recorder.closeTake();
             pushToast('Take deleted.');
           }}
+          onSaveToLibrary={activeBoardId ? handleSaveTake : undefined}
+        />
+      )}
+
+      {takesOpen && (
+        <TakesDrawer
+          takes={takes}
+          estimate={storageEstimate}
+          onClose={() => setTakesOpen(false)}
+          onDelete={(id) => void handleDeleteTake(id)}
         />
       )}
 

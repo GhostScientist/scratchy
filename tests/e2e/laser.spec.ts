@@ -3,6 +3,8 @@ import { test, expect } from '@playwright/test';
 test.beforeEach(async ({ page }) => {
   await page.goto('/');
   await page.waitForFunction(() => (window as any).__scratchy !== undefined);
+  // Board init applies the saved tool; wait for it so pressing L sticks.
+  await page.waitForSelector('.boards-menu');
 });
 
 test('laser pointer leaves a fading trail and no ink', async ({ page }) => {

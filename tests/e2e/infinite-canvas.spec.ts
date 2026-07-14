@@ -31,10 +31,12 @@ async function drawLine(page: Page, fx: number, fy: number, tx: number, ty: numb
   await page.mouse.up();
 }
 
-// Each test runs in a fresh browser context, so localStorage starts empty.
+// Each test runs in a fresh browser context, so storage starts empty. The
+// boards menu only renders once persistence has finished initializing.
 test.beforeEach(async ({ page }) => {
   await page.goto('/');
   await page.waitForFunction(() => (window as any).__scratchy !== undefined);
+  await page.waitForSelector('.boards-menu');
 });
 
 test('wheel zoom anchors the world point under the cursor', async ({ page }) => {
@@ -128,10 +130,23 @@ test('viewport survives a reload via autosave', async ({ page }) => {
     const vp = (window as any).__scratchy.viewport;
     vp.set({ x: 640, y: -320, zoom: 2 });
   });
-  // Debounced autosave is 600 ms.
-  await page.waitForTimeout(900);
+  // Wait for the debounced autosave to actually land in the board store.
+  // (expect.poll, not waitForFunction: an async predicate's Promise object
+  // would count as immediately truthy there.)
+  await expect
+    .poll(() =>
+      page.evaluate(async () => {
+        const api = (window as any).__scratchyBoards;
+        const boards = await api.listBoards();
+        if (boards.length !== 1) return false;
+        const board = await api.loadBoard(boards[0].id);
+        return board !== null && board.viewport.x === 640 && board.strokes.length === 1;
+      }),
+    )
+    .toBe(true);
   await page.reload();
   await page.waitForFunction(() => (window as any).__scratchy !== undefined);
+  await page.waitForSelector('.boards-menu');
 
   const restored = await viewportState(page);
   expect(restored.x).toBeCloseTo(640, 1);
@@ -142,6 +157,9 @@ test('viewport survives a reload via autosave', async ({ page }) => {
 
 test('v1 lessons migrate to v2 with an identity viewport', async ({ page }) => {
   await page.addInitScript(() => {
+    // The beforeEach visit already initialized the board store; drop it so
+    // this navigation is a true first run with only the legacy lesson.
+    indexedDB.deleteDatabase('scratchy');
     localStorage.clear();
     localStorage.setItem(
       'scratchy.lesson.v1',
@@ -180,20 +198,24 @@ test('v1 lessons migrate to v2 with an identity viewport', async ({ page }) => {
   });
   await page.goto('/');
   await page.waitForFunction(() => (window as any).__scratchy !== undefined);
+  await page.waitForSelector('.boards-menu');
 
   expect(await strokes(page)).toHaveLength(1);
   const vp = await viewportState(page);
   expect(vp).toEqual({ x: 0, y: 0, zoom: 1 });
   expect(await page.locator('.title-input').inputValue()).toBe('Legacy lesson');
 
-  // The mount autosave rewrites the lesson under the v2 key and drops v1.
-  await page.waitForFunction(() => localStorage.getItem('scratchy.lesson.v2') !== null);
-  const keys = await page.evaluate(() => ({
-    v2: JSON.parse(localStorage.getItem('scratchy.lesson.v2')!),
+  // The legacy lesson was imported into the IndexedDB board store and the
+  // localStorage copies were dropped after the import write succeeded.
+  const state = await page.evaluate(async () => ({
+    boards: await (window as any).__scratchyBoards.listBoards(),
     v1: localStorage.getItem('scratchy.lesson.v1'),
+    v2: localStorage.getItem('scratchy.lesson.v2'),
   }));
-  expect(keys.v2.version).toBe(2);
-  expect(keys.v1).toBeNull();
+  expect(state.boards).toHaveLength(1);
+  expect(state.boards[0].title).toBe('Legacy lesson');
+  expect(state.v1).toBeNull();
+  expect(state.v2).toBeNull();
 });
 
 test('pinch pan-zoom with two touch pointers', async ({ page }) => {

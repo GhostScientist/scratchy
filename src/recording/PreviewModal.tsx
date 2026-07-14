@@ -9,6 +9,8 @@ interface PreviewModalProps {
   onTitle(title: string): void;
   onClose(): void;
   onDelete(): void;
+  /** Persist the take to the local library; absent when storage can't. */
+  onSaveToLibrary?: () => Promise<boolean>;
 }
 
 function slugify(title: string): string {
@@ -27,6 +29,7 @@ function stamp(createdAt: number): string {
 
 export function PreviewModal(props: PreviewModalProps) {
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'failed'>('idle');
   const { take } = props;
 
   useEffect(() => {
@@ -77,6 +80,25 @@ export function PreviewModal(props: PreviewModalProps) {
             <DownloadIcon />
             Download
           </a>
+          {props.onSaveToLibrary && (
+            <button
+              type="button"
+              className="btn ghost"
+              disabled={saveState === 'saving' || saveState === 'saved'}
+              onClick={async () => {
+                setSaveState('saving');
+                setSaveState((await props.onSaveToLibrary!()) ? 'saved' : 'failed');
+              }}
+            >
+              {saveState === 'saved'
+                ? 'Saved to library ✓'
+                : saveState === 'saving'
+                  ? 'Saving…'
+                  : saveState === 'failed'
+                    ? 'Save failed — retry?'
+                    : 'Save to library'}
+            </button>
+          )}
           <button
             type="button"
             className={`btn ${confirmDelete ? 'danger' : 'ghost'}`}

@@ -397,6 +397,194 @@ button:disabled {
   color: rgba(255, 255, 255, 0.38);
 }
 
+/* ---- boards menu ------------------------------------------------------ */
+
+.boards-menu {
+  position: relative;
+}
+
+.boards-flyout {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 60;
+  min-width: 264px;
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: 6px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+}
+
+.board-row {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  border-radius: 10px;
+}
+
+.board-row.active {
+  background: var(--panel-3);
+}
+
+.board-open {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  text-align: left;
+}
+
+.board-row:not(.active) .board-open:hover {
+  background: var(--panel-3);
+}
+
+.board-title {
+  font-weight: 600;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.board-meta {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.board-delete {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  border-radius: 10px;
+  color: var(--text-dim);
+}
+
+.board-delete:hover {
+  color: var(--text);
+  background: var(--panel-3);
+}
+
+.board-delete.confirm {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.board-new {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  margin-top: 4px;
+  padding: 9px 10px;
+  border-radius: 10px;
+  color: var(--text-dim);
+  font-weight: 600;
+}
+
+.board-new:hover {
+  background: var(--panel-3);
+  color: var(--text);
+}
+
+/* ---- takes drawer ------------------------------------------------------ */
+
+.takes-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 70;
+  width: min(380px, 92vw);
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border-left: 1px solid var(--line);
+  box-shadow: var(--shadow);
+  animation: rise 180ms var(--ease);
+}
+
+.takes-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 18px 10px;
+}
+
+.takes-head h2 {
+  font-size: 16px;
+}
+
+.takes-empty {
+  padding: 8px 18px;
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+
+.takes-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 12px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.take-row {
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.take-open {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 9px;
+  text-align: left;
+}
+
+.take-open:hover {
+  background: var(--panel-2);
+}
+
+.take-title {
+  font-weight: 600;
+}
+
+.take-meta {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.take-video {
+  width: 100%;
+  margin-top: 6px;
+  border-radius: 9px;
+  background: #000;
+}
+
+.take-actions {
+  display: flex;
+  gap: 6px;
+  padding: 8px 4px 4px;
+}
+
+.takes-storage {
+  padding: 10px 18px 14px;
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
 /* ---- navigation aids (never recorded — they live outside the stage) --- */
 
 .nav-aids {

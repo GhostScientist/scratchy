@@ -19,6 +19,7 @@ async function drawLine(page: Page, fx: number, fy: number, tx: number, ty: numb
 test.beforeEach(async ({ page }) => {
   await page.goto('/');
   await page.waitForFunction(() => (window as any).__scratchy !== undefined);
+  await page.waitForSelector('.boards-menu');
 });
 
 test('zoom controls step, reset, and report the level', async ({ page }) => {

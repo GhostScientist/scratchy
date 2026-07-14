@@ -198,6 +198,33 @@ export function CloseIcon() {
   );
 }
 
+export function BoardsIcon() {
+  return (
+    <Svg>
+      <rect x="3.5" y="3.5" width="13" height="13" rx="2" />
+      <path d="M7.5 20.5h10a3 3 0 0 0 3-3v-10" />
+    </Svg>
+  );
+}
+
+export function PlusIcon() {
+  return (
+    <Svg width="16" height="16">
+      <path d="M12 5v14M5 12h14" />
+    </Svg>
+  );
+}
+
+export function LibraryIcon() {
+  return (
+    <Svg>
+      <rect x="3" y="4.5" width="18" height="15" rx="2.5" />
+      <path d="M3 9h18M8 4.5V9M16 4.5V9" />
+      <path d="M10.5 12.5l4 2.5-4 2.5z" />
+    </Svg>
+  );
+}
+
 export function DownloadIcon() {
   return (
     <Svg>
