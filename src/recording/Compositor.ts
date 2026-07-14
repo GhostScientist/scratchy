@@ -1,13 +1,19 @@
 import { drawBackground } from '../lib/backgrounds';
 import { drawStroke } from '../lib/strokes';
+import { drawLaserTrail } from '../lib/laser';
+import type { LaserPoint } from '../lib/laser';
 import { coverCrop, cameraClipPath } from '../lib/geometry';
 import { STAGE_WIDTH, STAGE_HEIGHT } from '../types';
-import type { BackgroundKind, CameraLayout, Stroke } from '../types';
+import type { BackgroundKind, CameraLayout, Stroke, ViewportState } from '../types';
 
 export interface CompositorSources {
   getBackground(): BackgroundKind;
   getInkCanvas(): HTMLCanvasElement | null;
   getActiveStroke(): Stroke | null;
+  /** Current view onto the infinite world — the recording follows it. */
+  getViewport(): ViewportState;
+  /** Fading laser-pointer trail; empty when the laser is idle. */
+  getLaserTrail(): readonly LaserPoint[];
   /** null when the camera is off or hidden */
   getVideo(): HTMLVideoElement | null;
   getCameraLayout(): CameraLayout;
@@ -66,13 +72,31 @@ export class Compositor {
 
   private draw(): void {
     const ctx = this.ctx;
-    drawBackground(ctx, this.sources.getBackground());
+    const view = this.sources.getViewport();
+    drawBackground(ctx, this.sources.getBackground(), {
+      ...view,
+      outW: STAGE_WIDTH,
+      outH: STAGE_HEIGHT,
+    });
 
+    // The ink cache always holds the current viewport's view at 2×, so a
+    // plain downscaling blit keeps the recording glued to the viewport. It is
+    // rebuilt on the engine's rAF, so a frame sampled mid-pan can be one
+    // frame stale relative to the active stroke — invisible at 30 fps.
     const ink = this.sources.getInkCanvas();
     if (ink) ctx.drawImage(ink, 0, 0, STAGE_WIDTH, STAGE_HEIGHT);
 
     const active = this.sources.getActiveStroke();
-    if (active) drawStroke(ctx, active);
+    if (active) {
+      ctx.save();
+      // Compositor canvas is 1× (no BACKING_SCALE): stage px = output px.
+      ctx.setTransform(view.zoom, 0, 0, view.zoom, -view.x * view.zoom, -view.y * view.zoom);
+      drawStroke(ctx, active);
+      ctx.restore();
+    }
+
+    const laser = this.sources.getLaserTrail();
+    if (laser.length > 0) drawLaserTrail(ctx, laser, view, performance.now());
 
     const video = this.sources.getVideo();
     if (video && video.readyState >= 2 && video.videoWidth > 0) {

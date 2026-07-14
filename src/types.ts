@@ -4,8 +4,19 @@ export const STAGE_HEIGHT = 720;
  *  always >= composition resolution for a clean downscale into the recording. */
 export const BACKING_SCALE = 2;
 
-export type Tool = 'pen' | 'highlighter' | 'eraser';
+export type Tool = 'pen' | 'highlighter' | 'eraser' | 'hand' | 'laser';
 export type InkTool = 'pen' | 'highlighter';
+
+/** x,y = world coordinates of the stage's top-left corner. */
+export interface ViewportState {
+  x: number;
+  y: number;
+  zoom: number;
+}
+
+export const MIN_ZOOM = 0.1;
+export const MAX_ZOOM = 8;
+export const DEFAULT_VIEWPORT: ViewportState = { x: 0, y: 0, zoom: 1 };
 export type BackgroundKind = 'white' | 'dark' | 'grid' | 'dots';
 export type CameraShape = 'circle' | 'rounded' | 'rect';
 

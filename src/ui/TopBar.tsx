@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
+import type { ReactNode } from 'react';
 import type { RecorderPhase } from '../recording/useRecorder';
-import { CameraIcon, CameraOffIcon, MicIcon, MicOffIcon } from './icons';
+import { CameraIcon, CameraOffIcon, LibraryIcon, MicIcon, MicOffIcon } from './icons';
 
 export function formatDuration(ms: number): string {
   const totalSeconds = Math.floor(ms / 1000);
@@ -12,6 +13,12 @@ export function formatDuration(ms: number): string {
 interface TopBarProps {
   title: string;
   onTitle(title: string): void;
+  /** Boards flyout, present when multi-board storage is available. */
+  boardsSlot?: ReactNode;
+  /** PNG export flyout. */
+  exportSlot?: ReactNode;
+  /** Opens the saved-takes drawer; absent when takes can't persist. */
+  onLibrary?: () => void;
   micEnabled: boolean;
   micMuted: boolean;
   onMic(): void;
@@ -56,6 +63,7 @@ export function TopBar(props: TopBarProps) {
         <span className="brand-dot" />
         Scratchy
       </div>
+      {props.boardsSlot}
       <input
         className="title-input"
         value={props.title}
@@ -66,6 +74,18 @@ export function TopBar(props: TopBarProps) {
       />
 
       <div className="top-actions">
+        {props.exportSlot}
+        {props.onLibrary && (
+          <button
+            type="button"
+            className="pill"
+            aria-label="Saved takes"
+            title="Saved takes"
+            onClick={props.onLibrary}
+          >
+            <LibraryIcon />
+          </button>
+        )}
         <button
           type="button"
           className={`pill${props.micEnabled && !props.micMuted ? ' active' : ''}${props.micMuted ? ' muted' : ''}`}

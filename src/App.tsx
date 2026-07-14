@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { StageCanvas } from './ink/StageCanvas';
 import type { InkEngine } from './ink/InkEngine';
+import type { Viewport } from './ink/Viewport';
 import { CameraOverlay } from './media/CameraOverlay';
 import { useCamera } from './media/useCamera';
 import { useMicrophone } from './media/useMicrophone';
@@ -10,13 +11,35 @@ import { PreviewModal } from './recording/PreviewModal';
 import { Toolbar } from './ui/Toolbar';
 import { TopBar } from './ui/TopBar';
 import { Countdown } from './ui/Countdown';
+import { Minimap } from './ui/Minimap';
+import { ZoomControls, zoomToFit } from './ui/ZoomControls';
 import { loadLesson, saveLesson, compactStrokes } from './persistence/autosave';
+import type { SavedLesson } from './persistence/autosave';
+import {
+  initBoards,
+  saveBoard,
+  loadBoard,
+  listBoards,
+  createBoard,
+  deleteBoard,
+  setActiveBoard,
+  saveTake,
+  listTakes,
+  deleteTake,
+} from './persistence/boards';
+import type { BoardMeta, StoredTake } from './persistence/boards';
+import { BoardsMenu } from './ui/BoardsMenu';
+import { TakesDrawer } from './ui/TakesDrawer';
+import { ExportMenu } from './ui/ExportMenu';
+import { exportViewPng, exportBoardPng, downloadBlob } from './export/png';
 import { clamp } from './lib/geometry';
 import {
   STAGE_WIDTH,
   STAGE_HEIGHT,
   DEFAULT_CAMERA_LAYOUT,
+  DEFAULT_VIEWPORT,
   cameraAspectFor,
+  nextId,
 } from './types';
 import type { BackgroundKind, CameraLayout, CameraShape, Tool } from './types';
 
@@ -38,11 +61,24 @@ export default function App() {
   const [cameraVisible, setCameraVisible] = useState(true);
   const [scale, setScale] = useState(1);
   const [toasts, setToasts] = useState<Toast[]>([]);
+  // Engine+viewport once the stage mounts, for the navigation-aid components.
+  const [nav, setNav] = useState<{ engine: InkEngine; viewport: Viewport } | null>(null);
+  const [inkRevision, setInkRevision] = useState(0);
+  // Multi-board state; activeBoardId stays null when IndexedDB is unavailable
+  // and the app runs on the single-lesson localStorage fallback.
+  const [boards, setBoards] = useState<BoardMeta[]>([]);
+  const [activeBoardId, setActiveBoardId] = useState<string | null>(null);
+  const [takesOpen, setTakesOpen] = useState(false);
+  const [takes, setTakes] = useState<StoredTake[]>([]);
+  const [storageEstimate, setStorageEstimate] = useState<{ usage: number; quota: number } | null>(
+    null,
+  );
 
   const camera = useCamera();
   const mic = useMicrophone();
 
   const engineRef = useRef<InkEngine | null>(null);
+  const viewportRef = useRef<Viewport | null>(null);
   const videoElRef = useRef<HTMLVideoElement | null>(null);
   const scaleRef = useRef(1);
   const cameraLayoutRef = useRef<CameraLayout>(DEFAULT_CAMERA_LAYOUT);
@@ -75,24 +111,68 @@ export default function App() {
 
   const saveTimer = useRef(0);
   const quotaWarned = useRef(false);
+  // 'idb' once initBoards succeeds; 'local' is the single-lesson fallback.
+  const storageModeRef = useRef<'local' | 'idb'>('local');
+  const storageReadyRef = useRef(false);
+  const boardIdRef = useRef<string | null>(null);
+  // Serializes IDB writes so a slow save can never land after a newer one.
+  const saveChainRef = useRef<Promise<void>>(Promise.resolve());
+
+  const snapshotLesson = useCallback(
+    (): Omit<SavedLesson, 'version'> => ({
+      ...lessonRef.current,
+      cameraLayout: cameraLayoutRef.current,
+      viewport: viewportRef.current?.get() ?? { ...DEFAULT_VIEWPORT },
+      strokes: compactStrokes(engineRef.current?.getStrokes() ?? []),
+      updatedAt: Date.now(),
+    }),
+    [],
+  );
+
+  const warnSaveFailed = useCallback(() => {
+    if (quotaWarned.current) return;
+    quotaWarned.current = true;
+    pushToast('Autosave paused — device storage may be full.');
+  }, [pushToast]);
+
+  /** Persist the current lesson under boardId (captured by the caller when
+   *  the save was scheduled, so a board switch can't cross-save). */
+  const persistNow = useCallback(
+    (boardId: string | null): Promise<void> => {
+      if (!storageReadyRef.current || !engineRef.current) return Promise.resolve();
+      const lesson = snapshotLesson();
+      if (storageModeRef.current === 'idb') {
+        if (!boardId) return Promise.resolve();
+        saveChainRef.current = saveChainRef.current.then(async () => {
+          const ok = await saveBoard({ ...lesson, version: 3, id: boardId });
+          if (!ok) warnSaveFailed();
+        });
+        setBoards((prev) => {
+          const meta: BoardMeta = {
+            id: boardId,
+            title: lesson.title,
+            updatedAt: lesson.updatedAt,
+            strokeCount: lesson.strokes.length,
+          };
+          return [meta, ...prev.filter((m) => m.id !== boardId)].sort(
+            (a, b) => b.updatedAt - a.updatedAt,
+          );
+        });
+        return saveChainRef.current;
+      }
+      if (!saveLesson({ version: 2, ...lesson })) warnSaveFailed();
+      return Promise.resolve();
+    },
+    [snapshotLesson, warnSaveFailed],
+  );
+
   const scheduleSave = useCallback(() => {
+    const boardId = boardIdRef.current;
     window.clearTimeout(saveTimer.current);
     saveTimer.current = window.setTimeout(() => {
-      const engine = engineRef.current;
-      if (!engine) return;
-      const ok = saveLesson({
-        version: 1,
-        ...lessonRef.current,
-        cameraLayout: cameraLayoutRef.current,
-        strokes: compactStrokes(engine.getStrokes()),
-        updatedAt: Date.now(),
-      });
-      if (!ok && !quotaWarned.current) {
-        quotaWarned.current = true;
-        pushToast('Autosave paused — local storage is full.');
-      }
+      void persistNow(boardId);
     }, 600);
-  }, [pushToast]);
+  }, [persistNow]);
 
   useEffect(() => {
     scheduleSave();
@@ -102,10 +182,8 @@ export default function App() {
 
   // ---- ink engine ------------------------------------------------------------
 
-  const handleEngineReady = useCallback((engine: InkEngine) => {
-    engineRef.current = engine;
-    const saved = loadLesson();
-    if (saved) {
+  const applyLesson = useCallback(
+    (saved: Omit<SavedLesson, 'version'>, engine: InkEngine, viewport: Viewport) => {
       setTitle(saved.title);
       setBackground(saved.background);
       setTool(saved.tool);
@@ -113,10 +191,41 @@ export default function App() {
       setWidth(saved.width);
       setCameraLayout(saved.cameraLayout);
       cameraLayoutRef.current = saved.cameraLayout;
+      viewport.set(saved.viewport);
       engine.loadStrokes(saved.strokes);
       setHasInk(saved.strokes.length > 0);
-    }
-  }, []);
+      setInkRevision((r) => r + 1);
+    },
+    [],
+  );
+
+  const handleEngineReady = useCallback(
+    (engine: InkEngine, viewport: Viewport) => {
+      engineRef.current = engine;
+      viewportRef.current = viewport;
+      void (async () => {
+        const init = await initBoards();
+        if (init) {
+          storageModeRef.current = 'idb';
+          boardIdRef.current = init.board.id;
+          setActiveBoardId(init.board.id);
+          setBoards(init.boards);
+          applyLesson(init.board, engine, viewport);
+        } else {
+          // IndexedDB unavailable — single-lesson localStorage, as before.
+          const saved = loadLesson();
+          if (saved) applyLesson(saved, engine, viewport);
+        }
+        storageReadyRef.current = true;
+        // Where you are on the board is part of the lesson — persist
+        // pans/zooms through the same debounced autosave.
+        viewport.onChange(() => scheduleSave());
+        scheduleSave();
+        setNav({ engine, viewport });
+      })();
+    },
+    [applyLesson, scheduleSave],
+  );
 
   const handleHistoryChange = useCallback((undo: boolean, redo: boolean) => {
     setHistory({ undo, redo });
@@ -124,8 +233,129 @@ export default function App() {
 
   const handleCommit = useCallback(() => {
     setHasInk(engineRef.current?.hasStrokes() ?? false);
+    setInkRevision((r) => r + 1);
     scheduleSave();
   }, [scheduleSave]);
+
+  // ---- boards ----------------------------------------------------------------
+
+  const openBoard = useCallback(
+    async (id: string, { saveCurrent }: { saveCurrent: boolean }) => {
+      const engine = engineRef.current;
+      const viewport = viewportRef.current;
+      if (!engine || !viewport) return;
+      window.clearTimeout(saveTimer.current);
+      if (saveCurrent) await persistNow(boardIdRef.current);
+      const board = await loadBoard(id);
+      if (!board) {
+        pushToast('Could not open that board.');
+        return;
+      }
+      boardIdRef.current = board.id;
+      setActiveBoardId(board.id);
+      applyLesson(board, engine, viewport);
+      void setActiveBoard(board.id);
+      setBoards(await listBoards());
+    },
+    [applyLesson, persistNow, pushToast],
+  );
+
+  const handleSwitchBoard = useCallback(
+    (id: string) => {
+      if (id === boardIdRef.current) return;
+      void openBoard(id, { saveCurrent: true });
+    },
+    [openBoard],
+  );
+
+  const handleCreateBoard = useCallback(async () => {
+    window.clearTimeout(saveTimer.current);
+    await persistNow(boardIdRef.current);
+    const board = await createBoard();
+    if (!board) {
+      pushToast('Could not create a board.');
+      return;
+    }
+    await openBoard(board.id, { saveCurrent: false });
+  }, [openBoard, persistNow, pushToast]);
+
+  const handleDeleteBoard = useCallback(
+    async (id: string) => {
+      const wasActive = id === boardIdRef.current;
+      if (wasActive) {
+        // Never re-save a board that is being deleted: kill the pending
+        // debounce and detach the id so later flushes become no-ops.
+        window.clearTimeout(saveTimer.current);
+        boardIdRef.current = null;
+      }
+      await deleteBoard(id);
+      if (!wasActive) {
+        setBoards(await listBoards());
+        return;
+      }
+      const remaining = await listBoards();
+      if (remaining.length > 0) {
+        await openBoard(remaining[0].id, { saveCurrent: false });
+      } else {
+        await handleCreateBoard();
+      }
+      pushToast('Board deleted.');
+    },
+    [handleCreateBoard, openBoard, pushToast],
+  );
+
+  // ---- PNG export ----------------------------------------------------------------
+
+  const handleExport = useCallback(
+    async (kind: 'view' | 'board') => {
+      const engine = engineRef.current;
+      const viewport = viewportRef.current;
+      if (!engine || !viewport) return;
+      const bg = stateRef.current.background;
+      const blob =
+        kind === 'view' ? await exportViewPng(engine, viewport, bg) : await exportBoardPng(engine, bg);
+      if (!blob) {
+        pushToast(
+          kind === 'board' ? 'Nothing to export — the board is empty.' : 'Export failed.',
+        );
+        return;
+      }
+      const slug =
+        lessonRef.current.title
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/(^-|-$)/g, '') || 'lesson';
+      downloadBlob(blob, `${slug}${kind === 'board' ? ' board' : ''}.png`);
+    },
+    [pushToast],
+  );
+
+  // ---- takes library -----------------------------------------------------------
+
+  const refreshTakes = useCallback(async () => {
+    const id = boardIdRef.current;
+    if (!id) return;
+    setTakes(await listTakes(id));
+    try {
+      const est = await navigator.storage?.estimate?.();
+      if (est) setStorageEstimate({ usage: est.usage ?? 0, quota: est.quota ?? 0 });
+    } catch {
+      // Estimate is a nicety only.
+    }
+  }, []);
+
+  const handleOpenTakes = useCallback(() => {
+    setTakesOpen(true);
+    void refreshTakes();
+  }, [refreshTakes]);
+
+  const handleDeleteTake = useCallback(
+    async (id: string) => {
+      await deleteTake(id);
+      void refreshTakes();
+    },
+    [refreshTakes],
+  );
 
   // ---- stage scaling -----------------------------------------------------------
 
@@ -153,6 +383,8 @@ export default function App() {
       getBackground: () => stateRef.current.background,
       getInkCanvas: () => engineRef.current?.getInkCanvas() ?? null,
       getActiveStroke: () => engineRef.current?.getActiveStroke() ?? null,
+      getViewport: () => viewportRef.current?.get() ?? { ...DEFAULT_VIEWPORT },
+      getLaserTrail: () => engineRef.current?.getLaserTrail() ?? [],
       getVideo: () =>
         stateRef.current.cameraEnabled && stateRef.current.cameraVisible
           ? videoElRef.current
@@ -164,6 +396,22 @@ export default function App() {
 
   const getMicStream = useCallback(() => micStreamRef.current, []);
   const recorder = useRecorder(sources, getMicStream);
+
+  const recorderTake = recorder.take;
+  const handleSaveTake = useCallback(async (): Promise<boolean> => {
+    const boardId = boardIdRef.current;
+    if (!recorderTake || !boardId) return false;
+    return saveTake({
+      id: nextId('t'),
+      boardId,
+      title: lessonRef.current.title,
+      blob: recorderTake.blob,
+      mimeType: recorderTake.mimeType,
+      extension: recorderTake.extension,
+      durationMs: recorderTake.durationMs,
+      createdAt: recorderTake.createdAt,
+    });
+  }, [recorderTake]);
 
   const recordingActive =
     recorder.phase === 'countdown' ||
@@ -264,6 +512,12 @@ export default function App() {
         return;
       }
       if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.code === 'Space') {
+        // Held spacebar pans with any pointer, like design tools.
+        e.preventDefault();
+        if (!e.repeat) engineRef.current?.setSpacePan(true);
+        return;
+      }
       switch (key) {
         case 'p':
           setTool('pen');
@@ -273,6 +527,12 @@ export default function App() {
           break;
         case 'e':
           setTool('eraser');
+          break;
+        case 'v':
+          setTool('hand');
+          break;
+        case 'l':
+          setTool('laser');
           break;
         case 'z':
           if (e.shiftKey) engineRef.current?.redo();
@@ -284,10 +544,34 @@ export default function App() {
         case 'm':
           keyActionsRef.current.mic();
           break;
+        case '0': {
+          // Back to 100% zoom, keeping the stage center fixed.
+          const viewport = viewportRef.current;
+          if (viewport) {
+            viewport.zoomAt(
+              { x: STAGE_WIDTH / 2, y: STAGE_HEIGHT / 2 },
+              1 / viewport.get().zoom,
+            );
+          }
+          break;
+        }
+        case '1': {
+          const engine = engineRef.current;
+          const viewport = viewportRef.current;
+          if (engine && viewport) zoomToFit(engine, viewport);
+          break;
+        }
       }
     };
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.code === 'Space') engineRef.current?.setSpacePan(false);
+    };
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    window.addEventListener('keyup', onKeyUp);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('keyup', onKeyUp);
+    };
   }, []);
 
   // ---- render -----------------------------------------------------------------
@@ -306,6 +590,25 @@ export default function App() {
       <TopBar
         title={title}
         onTitle={setTitle}
+        boardsSlot={
+          activeBoardId && (
+            <BoardsMenu
+              boards={boards}
+              activeBoardId={activeBoardId}
+              disabled={recordingActive}
+              onSwitch={handleSwitchBoard}
+              onCreate={() => void handleCreateBoard()}
+              onDelete={(id) => void handleDeleteBoard(id)}
+            />
+          )
+        }
+        exportSlot={
+          <ExportMenu
+            onExportView={() => void handleExport('view')}
+            onExportBoard={() => void handleExport('board')}
+          />
+        }
+        onLibrary={activeBoardId ? handleOpenTakes : undefined}
         micEnabled={mic.enabled}
         micMuted={mic.muted}
         onMic={handleMicButton}
@@ -359,6 +662,22 @@ export default function App() {
           </div>
         </div>
 
+        {nav && (
+          <div className="nav-aids">
+            <Minimap
+              engine={nav.engine}
+              viewport={nav.viewport}
+              background={background}
+              revision={inkRevision}
+            />
+            <ZoomControls
+              engine={nav.engine}
+              viewport={nav.viewport}
+              onEmptyFit={() => pushToast('Nothing to fit — the board is empty.')}
+            />
+          </div>
+        )}
+
         <Toolbar
           tool={tool}
           color={color}
@@ -388,6 +707,16 @@ export default function App() {
             recorder.closeTake();
             pushToast('Take deleted.');
           }}
+          onSaveToLibrary={activeBoardId ? handleSaveTake : undefined}
+        />
+      )}
+
+      {takesOpen && (
+        <TakesDrawer
+          takes={takes}
+          estimate={storageEstimate}
+          onClose={() => setTakesOpen(false)}
+          onDelete={(id) => void handleDeleteTake(id)}
         />
       )}
 

@@ -46,6 +46,27 @@ export function EraserIcon() {
   );
 }
 
+export function HandIcon() {
+  return (
+    <Svg>
+      <path d="M8.5 11.5V5.8a1.4 1.4 0 0 1 2.8 0v4.7" />
+      <path d="M11.3 10.5V4.4a1.4 1.4 0 0 1 2.8 0v6.1" />
+      <path d="M14.1 10.5V5.6a1.4 1.4 0 0 1 2.8 0v7.9" />
+      <path d="M8.5 11.5l-1.6-1.6a1.5 1.5 0 0 0-2.2 2l3.8 5.6A5.6 5.6 0 0 0 13.2 20h.2a5.6 5.6 0 0 0 5.5-5.6v-.9" />
+    </Svg>
+  );
+}
+
+export function LaserIcon() {
+  return (
+    <Svg>
+      <circle cx="8" cy="16" r="3" />
+      <path d="M10.5 13.5L20 4" strokeDasharray="3 2.5" />
+      <path d="M4 10.5l1.6 1.2M8 6.5l.5 2M13.5 5l-1.2 1.6" />
+    </Svg>
+  );
+}
+
 export function UndoIcon() {
   return (
     <Svg>
@@ -157,10 +178,60 @@ export function MirrorIcon() {
   );
 }
 
+export function FitIcon() {
+  return (
+    <Svg width="16" height="16">
+      <path d="M9 4H5.5A1.5 1.5 0 0 0 4 5.5V9" />
+      <path d="M15 4h3.5A1.5 1.5 0 0 1 20 5.5V9" />
+      <path d="M9 20H5.5A1.5 1.5 0 0 1 4 18.5V15" />
+      <path d="M15 20h3.5a1.5 1.5 0 0 0 1.5-1.5V15" />
+      <rect x="9" y="9.5" width="6" height="5" rx="1" />
+    </Svg>
+  );
+}
+
 export function CloseIcon() {
   return (
     <Svg width="16" height="16">
       <path d="M6 6l12 12M18 6L6 18" />
+    </Svg>
+  );
+}
+
+export function BoardsIcon() {
+  return (
+    <Svg>
+      <rect x="3.5" y="3.5" width="13" height="13" rx="2" />
+      <path d="M7.5 20.5h10a3 3 0 0 0 3-3v-10" />
+    </Svg>
+  );
+}
+
+export function PlusIcon() {
+  return (
+    <Svg width="16" height="16">
+      <path d="M12 5v14M5 12h14" />
+    </Svg>
+  );
+}
+
+export function LibraryIcon() {
+  return (
+    <Svg>
+      <rect x="3" y="4.5" width="18" height="15" rx="2.5" />
+      <path d="M3 9h18M8 4.5V9M16 4.5V9" />
+      <path d="M10.5 12.5l4 2.5-4 2.5z" />
+    </Svg>
+  );
+}
+
+export function ImageIcon() {
+  return (
+    <Svg>
+      <rect x="3.5" y="4.5" width="17" height="15" rx="2.5" />
+      <circle cx="9" cy="10" r="1.7" />
+      <path d="M3.5 16.5l4.7-4.2a1.5 1.5 0 0 1 2 0l6.3 5.7" />
+      <path d="M14 14.5l2.3-2a1.5 1.5 0 0 1 2 0l2.2 2" />
     </Svg>
   );
 }

@@ -1,4 +1,4 @@
-import type { BackgroundKind } from '../types';
+import type { BackgroundKind, ViewportState } from '../types';
 import { STAGE_WIDTH, STAGE_HEIGHT } from '../types';
 
 export interface BackgroundSpec {
@@ -18,35 +18,85 @@ export const BACKGROUND_KINDS: BackgroundKind[] = ['white', 'grid', 'dots', 'dar
 
 const GRID_STEP = 40;
 const DOT_STEP = 36;
+/** Grow the pattern step so cells never shrink below this many stage px. */
+const MIN_STEP_PX = 14;
 
-/** Shared by the display background canvas and the recording compositor so
- *  the recorded frame is pixel-identical to the visible stage. */
-export function drawBackground(ctx: CanvasRenderingContext2D, kind: BackgroundKind): void {
+export interface BackgroundView extends ViewportState {
+  outW: number;
+  outH: number;
+}
+
+const DEFAULT_VIEW: BackgroundView = { x: 0, y: 0, zoom: 1, outW: STAGE_WIDTH, outH: STAGE_HEIGHT };
+
+/** World-step widened so the pattern stays readable when zoomed far out. */
+function adaptiveStep(base: number, zoom: number): number {
+  let step = base;
+  while (step * zoom < MIN_STEP_PX) step *= 2;
+  return step;
+}
+
+/**
+ * Shared by the display background canvas and the recording compositor so the
+ * recorded frame is pixel-identical to the visible stage. The grid/dot pattern
+ * is anchored in world space: it scrolls and scales with the viewport. Expects
+ * a context whose transform maps 1 unit → 1 stage px; draws in stage px so
+ * lines stay crisp at any zoom.
+ */
+export function drawBackground(
+  ctx: CanvasRenderingContext2D,
+  kind: BackgroundKind,
+  view: BackgroundView = DEFAULT_VIEW,
+): void {
   const spec = BACKGROUNDS[kind];
   ctx.fillStyle = spec.base;
-  ctx.fillRect(0, 0, STAGE_WIDTH, STAGE_HEIGHT);
+  ctx.fillRect(0, 0, view.outW, view.outH);
+
+  if (kind !== 'grid' && kind !== 'dots') return;
+
+  const worldLeft = view.x;
+  const worldTop = view.y;
+  const worldRight = view.x + view.outW / view.zoom;
+  const worldBottom = view.y + view.outH / view.zoom;
+  const toStageX = (wx: number) => (wx - view.x) * view.zoom;
+  const toStageY = (wy: number) => (wy - view.y) * view.zoom;
 
   if (kind === 'grid') {
+    const step = adaptiveStep(GRID_STEP, view.zoom);
     ctx.strokeStyle = spec.line;
     ctx.lineWidth = 1;
     ctx.beginPath();
-    for (let x = GRID_STEP; x < STAGE_WIDTH; x += GRID_STEP) {
-      ctx.moveTo(x + 0.5, 0);
-      ctx.lineTo(x + 0.5, STAGE_HEIGHT);
+    for (let wx = Math.ceil(worldLeft / step) * step; wx <= worldRight; wx += step) {
+      const sx = Math.round(toStageX(wx)) + 0.5;
+      ctx.moveTo(sx, 0);
+      ctx.lineTo(sx, view.outH);
     }
-    for (let y = GRID_STEP; y < STAGE_HEIGHT; y += GRID_STEP) {
-      ctx.moveTo(0, y + 0.5);
-      ctx.lineTo(STAGE_WIDTH, y + 0.5);
+    for (let wy = Math.ceil(worldTop / step) * step; wy <= worldBottom; wy += step) {
+      const sy = Math.round(toStageY(wy)) + 0.5;
+      ctx.moveTo(0, sy);
+      ctx.lineTo(view.outW, sy);
     }
     ctx.stroke();
-  } else if (kind === 'dots') {
+  } else {
+    const step = adaptiveStep(DOT_STEP, view.zoom);
+    const half = step / 2;
     ctx.fillStyle = spec.line;
-    for (let x = DOT_STEP / 2; x < STAGE_WIDTH; x += DOT_STEP) {
-      for (let y = DOT_STEP / 2; y < STAGE_HEIGHT; y += DOT_STEP) {
-        ctx.beginPath();
-        ctx.arc(x, y, 1.6, 0, Math.PI * 2);
-        ctx.fill();
+    ctx.beginPath();
+    for (
+      let wx = (Math.ceil((worldLeft - half) / step)) * step + half;
+      wx <= worldRight;
+      wx += step
+    ) {
+      for (
+        let wy = (Math.ceil((worldTop - half) / step)) * step + half;
+        wy <= worldBottom;
+        wy += step
+      ) {
+        const sx = toStageX(wx);
+        const sy = toStageY(wy);
+        ctx.moveTo(sx + 1.6, sy);
+        ctx.arc(sx, sy, 1.6, 0, Math.PI * 2);
       }
     }
+    ctx.fill();
   }
 }
