@@ -1,8 +1,14 @@
 /**
  * Capability probe (SPEC §9): cheap feature checks first, then a short real
- * MediaRecorder smoke test (which also exercises pause/resume), then a
- * performance probe that gates the 1080p preset. Runs lazily on the first
- * Record tap and is cached as a DeviceProfile; failures are never cached.
+ * MediaRecorder smoke test, then a separate pause/resume reliability run,
+ * then a performance probe that gates the 1080p preset. Runs lazily on the
+ * first Record tap and is cached as a DeviceProfile; failures are never
+ * cached.
+ *
+ * Only missing APIs hard-block recording. A smoke test that produces no
+ * data demotes to a warning + compatibility mode instead — the probe is a
+ * simulation, and a false negative must not lock out recording that would
+ * actually work (the real recorder has its own error handling).
  */
 
 import { negotiateFormat } from '../recording/mime';
@@ -15,7 +21,6 @@ import {
 } from './profile';
 import type { DeviceProfile, ProbeResult } from './profile';
 
-const SMOKE_TIMESLICE_MS = 150;
 const PLAYBACK_TIMEOUT_MS = 4000;
 /** Median compositor-frame budget for 1080p at 30fps, leaving encoder headroom. */
 const FRAME_BUDGET_MS = 8;
@@ -49,119 +54,159 @@ function canPlay(blob: Blob): Promise<boolean> {
   });
 }
 
-interface SmokeOutcome {
-  ok: boolean;
-  pauseReliable: boolean;
-  reason?: string;
+interface ShortRecordingResult {
+  blob: Blob;
+  /** Data arrived after resume — the pause/resume cycle kept recording. */
+  dataAfterResume: boolean;
+  pauseThrew: boolean;
 }
 
-/** ~1s off-screen canvas recording that exercises start → pause → resume →
- *  stop and verifies the result plays. */
+/** One bounded MediaRecorder run against an existing stream. Never rejects;
+ *  a broken recorder just resolves with an empty blob. */
+function runShortRecording(
+  stream: MediaStream,
+  mimeType: string,
+  opts: { timeslice?: number; pauseResume?: boolean },
+): Promise<ShortRecordingResult> {
+  return new Promise((resolve) => {
+    let recorder: MediaRecorder;
+    try {
+      recorder = new MediaRecorder(stream, { mimeType });
+    } catch {
+      try {
+        recorder = new MediaRecorder(stream);
+      } catch {
+        resolve({ blob: new Blob([]), dataAfterResume: false, pauseThrew: true });
+        return;
+      }
+    }
+    const chunks: Blob[] = [];
+    let resumed = false;
+    let dataAfterResume = false;
+    let pauseThrew = false;
+    let settled = false;
+    let graceTimer = 0;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(hardStop);
+      window.clearTimeout(graceTimer);
+      resolve({
+        blob: new Blob(chunks, { type: recorder.mimeType || mimeType }),
+        dataAfterResume,
+        pauseThrew,
+      });
+    };
+    recorder.ondataavailable = (e: BlobEvent) => {
+      if (!e.data || e.data.size === 0) return;
+      chunks.push(e.data);
+      if (resumed) dataAfterResume = true;
+    };
+    // Give a trailing dataavailable a beat to land after onstop.
+    recorder.onstop = () => window.setTimeout(finish, 50);
+    // Backstop for engines that never fire onstop on canvas streams.
+    const hardStop = window.setTimeout(finish, 6000);
+
+    void (async () => {
+      try {
+        if (opts.timeslice) recorder.start(opts.timeslice);
+        else recorder.start();
+      } catch {
+        finish();
+        return;
+      }
+      await delay(350);
+      if (opts.pauseResume) {
+        try {
+          recorder.pause();
+          await delay(150);
+          recorder.resume();
+          resumed = true;
+        } catch {
+          pauseThrew = true;
+        }
+      }
+      await delay(400);
+      try {
+        recorder.requestData();
+      } catch {
+        // Nothing pending / recorder never really started.
+      }
+      try {
+        recorder.stop();
+      } catch {
+        finish();
+        return;
+      }
+      graceTimer = window.setTimeout(finish, 4000);
+    })();
+  });
+}
+
+interface SmokeOutcome {
+  /** A plain recording produced data. */
+  ok: boolean;
+  /** The produced blob parsed as playable media. */
+  playable: boolean;
+  pauseReliable: boolean;
+}
+
+/** Short off-screen canvas recording. Basic capability is judged from a
+ *  plain run first — a wedged pause() must read as "pause unreliable", not
+ *  "cannot record". */
 async function smokeTest(format: NegotiatedFormat): Promise<SmokeOutcome> {
   const canvas = document.createElement('canvas');
   canvas.width = 320;
   canvas.height = 180;
   const ctx = canvas.getContext('2d');
-  if (!ctx) return { ok: false, pauseReliable: false, reason: 'Canvas 2D is not available.' };
+  if (!ctx) return { ok: false, playable: false, pauseReliable: false };
 
-  // Keep the canvas changing so captureStream actually produces frames.
+  const stream = canvas.captureStream(30);
+  const track = stream.getVideoTracks()[0] ?? null;
+
+  // Keep the canvas changing AND force frame delivery — the probe canvas is
+  // detached from the DOM, and some engines only emit captureStream frames
+  // via requestFrame (the recording compositor does the same).
   let hue = 0;
   let raf = 0;
   const paint = () => {
     hue = (hue + 11) % 360;
     ctx.fillStyle = `hsl(${hue} 60% 55%)`;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
+    if (track && 'requestFrame' in track) {
+      (track as CanvasCaptureMediaStreamTrack).requestFrame();
+    }
     raf = requestAnimationFrame(paint);
   };
   paint();
-
-  const stream = canvas.captureStream(30);
   const cleanup = () => {
     cancelAnimationFrame(raf);
     stream.getTracks().forEach((t) => t.stop());
   };
 
-  let recorder: MediaRecorder;
-  try {
-    recorder = new MediaRecorder(stream, { mimeType: format.mimeType });
-  } catch {
-    try {
-      recorder = new MediaRecorder(stream);
-    } catch {
-      cleanup();
-      return {
-        ok: false,
-        pauseReliable: false,
-        reason: 'The recorder could not be initialized in this browser.',
-      };
-    }
+  // 1. Basic capability: a plain timesliced run, then a no-timeslice retry —
+  //    some engines only deliver data at stop when started without one.
+  let basic = await runShortRecording(stream, format.mimeType, { timeslice: 200 });
+  if (basic.blob.size === 0) {
+    basic = await runShortRecording(stream, format.mimeType, {});
   }
-
-  const chunks: Blob[] = [];
-  let resumed = false;
-  let dataAfterResume = false;
-  recorder.ondataavailable = (e: BlobEvent) => {
-    if (!e.data || e.data.size === 0) return;
-    chunks.push(e.data);
-    if (resumed) dataAfterResume = true;
-  };
-
-  let pauseWorked = false;
-  try {
-    recorder.start(SMOKE_TIMESLICE_MS);
-    await delay(350);
-    try {
-      recorder.pause();
-      await delay(150);
-      recorder.resume();
-      resumed = true;
-      pauseWorked = true;
-      await delay(400);
-    } catch {
-      pauseWorked = false;
-      await delay(400);
-    }
-  } catch {
+  if (basic.blob.size === 0) {
     cleanup();
-    return { ok: false, pauseReliable: false, reason: 'A test recording failed to start.' };
+    return { ok: false, playable: false, pauseReliable: false };
   }
+  const playable = await canPlay(basic.blob);
 
-  await new Promise<void>((resolve) => {
-    const finish = window.setTimeout(resolve, 1500);
-    recorder.onstop = () => {
-      window.clearTimeout(finish);
-      resolve();
-    };
-    try {
-      recorder.requestData();
-    } catch {
-      // Nothing pending.
-    }
-    try {
-      recorder.stop();
-    } catch {
-      window.clearTimeout(finish);
-      resolve();
-    }
+  // 2. Pause/resume reliability, isolated in its own run.
+  const pauseRun = await runShortRecording(stream, format.mimeType, {
+    timeslice: 150,
+    pauseResume: true,
   });
   cleanup();
-
-  const blob = new Blob(chunks, { type: recorder.mimeType || format.mimeType });
-  if (blob.size === 0) {
-    return {
-      ok: false,
-      pauseReliable: false,
-      reason: 'A test recording produced no data — this browser cannot record a canvas.',
-    };
-  }
-  if (!(await canPlay(blob))) {
-    return {
-      ok: false,
-      pauseReliable: false,
-      reason: 'A test recording could not be played back — the produced format is broken here.',
-    };
-  }
-  return { ok: true, pauseReliable: pauseWorked && dataAfterResume };
+  return {
+    ok: true,
+    playable,
+    pauseReliable: !pauseRun.pauseThrew && pauseRun.blob.size > 0 && pauseRun.dataAfterResume,
+  };
 }
 
 /** Times 1080p-scale compositor work (clear + 2× ink-cache downscale blit).
@@ -261,19 +306,28 @@ export async function runCapabilityProbe(): Promise<ProbeResult> {
 
   const smoke = await smokeTest(format);
   if (!smoke.ok) {
-    return { ok: false, reason: smoke.reason ?? 'A test recording failed.' };
+    // The probe is a simulation — warn and fall back to compatibility mode
+    // rather than blocking a recording that may work for real.
+    warnings.unshift(
+      'A quick device check could not produce a test recording — recording may not work in this browser, but you can try.',
+    );
+  } else if (!smoke.playable) {
+    warnings.push(
+      'The test recording did not play back cleanly — exported files may not play in this browser.',
+    );
   }
-  if (!smoke.pauseReliable) {
+  if (smoke.ok && !smoke.pauseReliable) {
     warnings.push('Pause/resume is unreliable in this browser — the pause control is hidden.');
   }
 
-  const fastEnough = await performanceProbe();
+  const fastEnough = smoke.ok ? await performanceProbe() : false;
 
   const profile: DeviceProfile = {
     version: 1,
     userAgent: navigator.userAgent,
     mimeType: format.mimeType,
     extension: format.extension,
+    smokeOk: smoke.ok,
     supports1080p: fastEnough,
     supportsVertical: fastEnough,
     storageAdapter,
@@ -282,7 +336,8 @@ export async function runCapabilityProbe(): Promise<ProbeResult> {
     lastProbeAt: Date.now(),
     warnings,
   };
-  saveDeviceProfile(profile);
+  // A failed smoke test is never cached — the next Record tap re-checks.
+  if (smoke.ok) saveDeviceProfile(profile);
   return { ok: true, profile };
 }
 

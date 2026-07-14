@@ -605,6 +605,14 @@ export default function App() {
         return;
       }
       setDeviceProfile(result.profile);
+      if (!result.profile.smokeOk) {
+        // Compatibility mode: the smoke test failed but only missing APIs
+        // hard-block — let the real recorder be the judge.
+        pushToast(
+          result.profile.warnings[0] ??
+            'The device check could not verify recording — trying anyway.',
+        );
+      }
       // A gated preset can outlive a re-probe that says no — drop back.
       if (presetRef.current.needsPerformance && !result.profile.supports1080p) {
         presetRef.current = presetById('compat');

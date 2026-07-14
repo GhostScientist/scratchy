@@ -11,6 +11,8 @@ export interface DeviceProfile {
   /** Negotiated recording container/codec, e.g. video/webm;codecs=... */
   mimeType: string;
   extension: string;
+  /** The smoke recording produced data. false = compatibility mode, uncached. */
+  smokeOk: boolean;
   supports1080p: boolean;
   supportsVertical: boolean;
   storageAdapter: 'idb' | 'memory';
@@ -31,7 +33,9 @@ export function loadDeviceProfile(): DeviceProfile | null {
     if (!raw) return null;
     const parsed = JSON.parse(raw) as DeviceProfile;
     if (parsed.version !== 1 || typeof parsed.mimeType !== 'string') return null;
-    return parsed;
+    // Profiles are only ever cached after a passing smoke test; older
+    // profiles predate the field.
+    return { ...parsed, smokeOk: parsed.smokeOk ?? true };
   } catch {
     return null;
   }

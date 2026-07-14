@@ -72,6 +72,43 @@ test('a browser without MediaRecorder gets a specific error and no countdown', a
   ).toBeNull();
 });
 
+test('a failing smoke test warns but never blocks recording', async ({ page }) => {
+  test.setTimeout(90_000);
+  await page.addInitScript(() => {
+    // A recorder that exists and negotiates formats but never records:
+    // start() is swallowed, so the probe's smoke runs produce zero data.
+    const Real = window.MediaRecorder;
+    class SilentRecorder extends Real {
+      start() {
+        // Never actually starts.
+      }
+    }
+    (SilentRecorder as any).isTypeSupported = Real.isTypeSupported.bind(Real);
+    (window as any).MediaRecorder = SilentRecorder;
+  });
+  await page.goto('/');
+  await page.waitForFunction(() => (window as any).__scratchyRecorder !== undefined);
+  await page.waitForSelector('.boards-menu');
+
+  await page.getByRole('button', { name: 'Record' }).click();
+  // The probe fails its smoke test, warns, and still starts the countdown.
+  await expect(
+    page.locator('.toast', { hasText: 'could not produce a test recording' }),
+  ).toBeVisible({ timeout: 30_000 });
+  await page.waitForFunction(
+    () => {
+      const phase = (window as any).__scratchyRecorder.getPhase();
+      return phase === 'countdown' || phase === 'recording';
+    },
+    undefined,
+    { timeout: 15_000 },
+  );
+  // A failed smoke test is never cached.
+  expect(
+    await page.evaluate(() => localStorage.getItem('scratchy.deviceProfile.v1')),
+  ).toBeNull();
+});
+
 test('the settings menu shows the negotiated format after a device check', async ({ page }) => {
   test.setTimeout(60_000);
   await page.goto('/');
