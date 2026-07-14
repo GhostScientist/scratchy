@@ -6,6 +6,7 @@ import {
   HighlighterIcon,
   EraserIcon,
   HandIcon,
+  LaserIcon,
   UndoIcon,
   RedoIcon,
   TrashIcon,
@@ -39,6 +40,7 @@ const TOOLS: { tool: Tool; label: string; keyHint: string; Icon: typeof PenIcon 
   { tool: 'pen', label: 'Pen', keyHint: 'P', Icon: PenIcon },
   { tool: 'highlighter', label: 'Highlighter', keyHint: 'H', Icon: HighlighterIcon },
   { tool: 'eraser', label: 'Eraser', keyHint: 'E', Icon: EraserIcon },
+  { tool: 'laser', label: 'Laser pointer', keyHint: 'L', Icon: LaserIcon },
   { tool: 'hand', label: 'Move around', keyHint: 'V', Icon: HandIcon },
 ];
 

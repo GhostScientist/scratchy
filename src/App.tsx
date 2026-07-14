@@ -173,6 +173,7 @@ export default function App() {
       getInkCanvas: () => engineRef.current?.getInkCanvas() ?? null,
       getActiveStroke: () => engineRef.current?.getActiveStroke() ?? null,
       getViewport: () => viewportRef.current?.get() ?? { ...DEFAULT_VIEWPORT },
+      getLaserTrail: () => engineRef.current?.getLaserTrail() ?? [],
       getVideo: () =>
         stateRef.current.cameraEnabled && stateRef.current.cameraVisible
           ? videoElRef.current
@@ -302,6 +303,9 @@ export default function App() {
           break;
         case 'v':
           setTool('hand');
+          break;
+        case 'l':
+          setTool('laser');
           break;
         case 'z':
           if (e.shiftKey) engineRef.current?.redo();

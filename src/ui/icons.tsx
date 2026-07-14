@@ -57,6 +57,16 @@ export function HandIcon() {
   );
 }
 
+export function LaserIcon() {
+  return (
+    <Svg>
+      <circle cx="8" cy="16" r="3" />
+      <path d="M10.5 13.5L20 4" strokeDasharray="3 2.5" />
+      <path d="M4 10.5l1.6 1.2M8 6.5l.5 2M13.5 5l-1.2 1.6" />
+    </Svg>
+  );
+}
+
 export function UndoIcon() {
   return (
     <Svg>

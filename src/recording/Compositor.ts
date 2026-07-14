@@ -1,5 +1,7 @@
 import { drawBackground } from '../lib/backgrounds';
 import { drawStroke } from '../lib/strokes';
+import { drawLaserTrail } from '../lib/laser';
+import type { LaserPoint } from '../lib/laser';
 import { coverCrop, cameraClipPath } from '../lib/geometry';
 import { STAGE_WIDTH, STAGE_HEIGHT } from '../types';
 import type { BackgroundKind, CameraLayout, Stroke, ViewportState } from '../types';
@@ -10,6 +12,8 @@ export interface CompositorSources {
   getActiveStroke(): Stroke | null;
   /** Current view onto the infinite world — the recording follows it. */
   getViewport(): ViewportState;
+  /** Fading laser-pointer trail; empty when the laser is idle. */
+  getLaserTrail(): readonly LaserPoint[];
   /** null when the camera is off or hidden */
   getVideo(): HTMLVideoElement | null;
   getCameraLayout(): CameraLayout;
@@ -90,6 +94,9 @@ export class Compositor {
       drawStroke(ctx, active);
       ctx.restore();
     }
+
+    const laser = this.sources.getLaserTrail();
+    if (laser.length > 0) drawLaserTrail(ctx, laser, view, performance.now());
 
     const video = this.sources.getVideo();
     if (video && video.readyState >= 2 && video.videoWidth > 0) {

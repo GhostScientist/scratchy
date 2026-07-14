@@ -4,7 +4,7 @@ export const STAGE_HEIGHT = 720;
  *  always >= composition resolution for a clean downscale into the recording. */
 export const BACKING_SCALE = 2;
 
-export type Tool = 'pen' | 'highlighter' | 'eraser' | 'hand';
+export type Tool = 'pen' | 'highlighter' | 'eraser' | 'hand' | 'laser';
 export type InkTool = 'pen' | 'highlighter';
 
 /** x,y = world coordinates of the stage's top-left corner. */

@@ -1,5 +1,7 @@
 import { drawStroke, strokeBBox } from '../lib/strokes';
 import type { BBox } from '../lib/strokes';
+import { drawLaserTrail, pruneLaserTrail } from '../lib/laser';
+import type { LaserPoint } from '../lib/laser';
 import { distPointToSegment } from '../lib/geometry';
 import { STAGE_WIDTH, STAGE_HEIGHT, BACKING_SCALE, nextId } from '../types';
 import type { Stroke, Tool } from '../types';
@@ -22,7 +24,7 @@ const PAN_TAKEOVER_MS = 150;
 /** ...but only while the provisional stroke is still short (stage px). */
 const PAN_TAKEOVER_TRAVEL_PX = 12;
 
-type Mode = 'idle' | 'stroke' | 'erase' | 'pan';
+type Mode = 'idle' | 'stroke' | 'erase' | 'pan' | 'laser';
 
 /**
  * Imperative ink core. Owns the committed-ink cache canvas and the
@@ -55,6 +57,9 @@ export class InkEngine {
 
   /** Eraser cursor position in world coordinates. */
   private cursor: Point | null = null;
+
+  /** Ephemeral pointing trail (world coords). Never part of the document. */
+  private laserTrail: LaserPoint[] = [];
 
   private tool: Tool = 'pen';
   private color = '#1d1f24';
@@ -198,6 +203,10 @@ export class InkEngine {
     return this.inkCanvas;
   }
 
+  getLaserTrail(): readonly LaserPoint[] {
+    return this.laserTrail;
+  }
+
   /** Union bbox of all committed ink in world coordinates. */
   getInkBBox(): BBox | null {
     if (this.strokes.length === 0) return null;
@@ -294,7 +303,8 @@ export class InkEngine {
       return;
     }
 
-    if (this.mode === 'erase') return; // resting palm during an erase drag
+    // Resting palm during an erase drag or while pointing.
+    if (this.mode === 'erase' || this.mode === 'laser') return;
 
     // idle —
     e.preventDefault();
@@ -313,6 +323,13 @@ export class InkEngine {
     const stage = this.toStage(e.clientX, e.clientY);
     const p = this.viewport.stageToWorld(stage);
     this.lastStagePoint = stage;
+
+    if (tool === 'laser') {
+      this.mode = 'laser';
+      this.laserTrail.push({ x: p.x, y: p.y, t: performance.now() });
+      this.requestRepaint();
+      return;
+    }
 
     if (tool === 'eraser') {
       this.mode = 'erase';
@@ -368,6 +385,13 @@ export class InkEngine {
       const p = this.toWorld(e.clientX, e.clientY);
       if (this.lastErasePoint) this.eraseAlong(this.lastErasePoint, p);
       this.lastErasePoint = p;
+      return;
+    }
+
+    if (this.mode === 'laser') {
+      const p = this.toWorld(e.clientX, e.clientY);
+      this.laserTrail.push({ x: p.x, y: p.y, t: performance.now() });
+      this.requestRepaint();
       return;
     }
 
@@ -440,7 +464,14 @@ export class InkEngine {
     this.activePointerId = null;
     this.lastStagePoint = null;
     const wasErasing = this.mode === 'erase';
+    const wasLaser = this.mode === 'laser';
     this.mode = 'idle';
+
+    if (wasLaser) {
+      // Nothing to commit — the trail keeps fading on its own.
+      this.requestRepaint();
+      return;
+    }
 
     if (wasErasing) {
       this.lastErasePoint = null;
@@ -552,6 +583,16 @@ export class InkEngine {
     ctx.clearRect(0, 0, this.activeCanvas.width, this.activeCanvas.height);
     this.viewport.applyTo(ctx);
     if (this.active) drawStroke(ctx, this.active);
+    if (this.laserTrail.length > 0) {
+      const now = performance.now();
+      this.laserTrail = pruneLaserTrail(this.laserTrail, now);
+      if (this.laserTrail.length > 0) {
+        ctx.setTransform(BACKING_SCALE, 0, 0, BACKING_SCALE, 0, 0);
+        drawLaserTrail(ctx, this.laserTrail, this.viewport.get(), now);
+        // Keep repainting until the trail has fully faded out.
+        this.requestRepaint();
+      }
+    }
     if (this.tool === 'eraser' && this.cursor) {
       // The cursor is a screen-space HUD: constant size regardless of zoom.
       ctx.setTransform(BACKING_SCALE, 0, 0, BACKING_SCALE, 0, 0);
