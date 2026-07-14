@@ -175,9 +175,8 @@ export class InkEngine {
   };
 
   private onPointerDown = (e: PointerEvent): void => {
-    // Finger drawing is off: touch never draws, and any touch contact that
-    // arrives while a pen stroke is live (a resting palm) is ignored outright.
-    if (e.pointerType === 'touch') return;
+    // First contact wins: while a stroke is live, any additional contact
+    // (e.g. a resting palm) is ignored.
     if (this.activePointerId !== null) return;
 
     e.preventDefault();
@@ -208,7 +207,7 @@ export class InkEngine {
   };
 
   private onPointerMove = (e: PointerEvent): void => {
-    if (this.tool === 'eraser' && e.pointerType !== 'touch') {
+    if (this.tool === 'eraser') {
       this.cursor = this.toLogical(e);
       this.requestRepaint();
     }

@@ -48,19 +48,31 @@ export function useRecorder(
   const timerRef = useRef(0);
   const countdownTimerRef = useRef(0);
   const failedRef = useRef(false);
+  const finalizedRef = useRef(false);
+  const watchdogRef = useRef(0);
   const takeRef = useRef<Take | null>(null);
   takeRef.current = take;
 
   const teardownCapture = useCallback(() => {
     window.clearInterval(timerRef.current);
+    window.clearTimeout(watchdogRef.current);
     compositorRef.current?.stop();
-    // Stop only the canvas video track — mic tracks belong to the mic hook.
-    streamRef.current?.getVideoTracks().forEach((t) => t.stop());
+    // The recorder stream owns its tracks (mic tracks are clones), so end
+    // them all — ending every track is what makes the encoder flush.
+    streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
+    const recorder = recorderRef.current;
+    if (recorder) {
+      recorder.ondataavailable = null;
+      recorder.onerror = null;
+      recorder.onstop = null;
+    }
     recorderRef.current = null;
   }, []);
 
   const finalize = useCallback(() => {
+    if (finalizedRef.current) return;
+    finalizedRef.current = true;
     const recorder = recorderRef.current;
     const format = formatRef.current;
     teardownCapture();
@@ -101,7 +113,9 @@ export function useRecorder(
       const format = formatRef.current!;
       const stream = compositor.captureStream(30);
       const mic = getMicRef.current();
-      mic?.getAudioTracks().forEach((t) => stream.addTrack(t));
+      // Clone mic tracks so teardown can stop them without killing the
+      // mic hook's stream for the next take.
+      mic?.getAudioTracks().forEach((t) => stream.addTrack(t.clone()));
       streamRef.current = stream;
 
       let recorder: MediaRecorder;
@@ -115,6 +129,7 @@ export function useRecorder(
         recorder = new MediaRecorder(stream);
       }
       failedRef.current = false;
+      finalizedRef.current = false;
       chunksRef.current = [];
       recorder.ondataavailable = (e: BlobEvent) => {
         if (e.data && e.data.size > 0) chunksRef.current.push(e.data);
@@ -179,10 +194,22 @@ export function useRecorder(
     window.clearInterval(timerRef.current);
     setPhase('stopping');
     try {
+      // Flush the pending partial chunk before stopping — Safari can fail
+      // to deliver a final dataavailable on mixed canvas+mic streams.
+      if (recorder.state === 'recording') recorder.requestData();
+    } catch {
+      // Nothing to flush; the 1s timeslice chunks are enough.
+    }
+    try {
       recorder.stop();
     } catch {
       finalize();
+      return;
     }
+    // Safari sometimes never fires onstop for canvas+mic composite streams;
+    // finalize from the accumulated timeslice chunks if it hasn't fired.
+    window.clearTimeout(watchdogRef.current);
+    watchdogRef.current = window.setTimeout(finalize, 3000);
   }, [finalize]);
 
   const closeTake = useCallback(() => {
@@ -197,8 +224,9 @@ export function useRecorder(
     () => () => {
       window.clearInterval(countdownTimerRef.current);
       window.clearInterval(timerRef.current);
+      window.clearTimeout(watchdogRef.current);
       compositorRef.current?.stop();
-      streamRef.current?.getVideoTracks().forEach((t) => t.stop());
+      streamRef.current?.getTracks().forEach((t) => t.stop());
       if (takeRef.current) URL.revokeObjectURL(takeRef.current.url);
     },
     [],
