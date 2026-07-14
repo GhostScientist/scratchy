@@ -589,6 +589,14 @@ button:disabled {
   color: var(--text);
 }
 
+.settings-device {
+  padding: 2px 12px 6px;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--text-dim);
+  max-width: 240px;
+}
+
 /* ---- takes drawer ------------------------------------------------------ */
 
 .takes-drawer {

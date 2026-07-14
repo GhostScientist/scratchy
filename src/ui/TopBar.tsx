@@ -37,6 +37,8 @@ interface TopBarProps {
   onCamera(): void;
   phase: RecorderPhase;
   elapsedMs: number;
+  /** True while the one-time capability probe runs before recording. */
+  probing?: boolean;
   /** Absent (undefined) when pause is unsupported/unreliable on this device. */
   onPause?: () => void;
   onResume?: () => void;
@@ -125,9 +127,20 @@ export function TopBar(props: TopBarProps) {
 
         <div className="record-cluster">
           {(phase === 'idle' || phase === 'complete') && (
-            <button type="button" className="record-btn" onClick={props.onRecord}>
-              <span className="rec-dot" aria-hidden="true" />
-              Record
+            <button
+              type="button"
+              className={`record-btn${props.probing ? ' counting' : ''}`}
+              disabled={props.probing}
+              onClick={props.onRecord}
+            >
+              {props.probing ? (
+                'Checking device…'
+              ) : (
+                <>
+                  <span className="rec-dot" aria-hidden="true" />
+                  Record
+                </>
+              )}
             </button>
           )}
           {phase === 'countdown' && (

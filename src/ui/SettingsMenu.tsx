@@ -5,6 +5,10 @@ import type { Handedness } from '../settings/settings';
 interface SettingsMenuProps {
   handedness: Handedness;
   onHandedness(handedness: Handedness): void;
+  /** One-line capability summary, null before the first device check. */
+  deviceSummary: string | null;
+  deviceChecking: boolean;
+  onDeviceCheck(): void;
 }
 
 export function SettingsMenu(props: SettingsMenuProps) {
@@ -57,6 +61,17 @@ export function SettingsMenu(props: SettingsMenuProps) {
               Left-handed
             </button>
           </div>
+          <div className="settings-label">This device</div>
+          <p className="settings-device">
+            {props.deviceSummary ?? 'Not checked yet — runs before your first recording.'}
+          </p>
+          <button
+            type="button"
+            disabled={props.deviceChecking}
+            onClick={props.onDeviceCheck}
+          >
+            {props.deviceChecking ? 'Checking…' : 'Run device check'}
+          </button>
         </div>
       )}
     </div>

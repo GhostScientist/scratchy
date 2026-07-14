@@ -35,6 +35,9 @@ import { ExportMenu } from './ui/ExportMenu';
 import { SettingsMenu } from './ui/SettingsMenu';
 import { loadSettings, saveSettings } from './settings/settings';
 import type { AppSettings } from './settings/settings';
+import { ensureDeviceProfile } from './capability/probe';
+import { loadDeviceProfile } from './capability/profile';
+import type { DeviceProfile } from './capability/profile';
 import { exportViewPng, exportBoardPng, downloadBlob } from './export/png';
 import { clamp } from './lib/geometry';
 import {
@@ -88,6 +91,10 @@ export default function App() {
       return next;
     });
   }, []);
+
+  // Capability profile (SPEC §9) — probed lazily before the first recording.
+  const [deviceProfile, setDeviceProfile] = useState<DeviceProfile | null>(loadDeviceProfile);
+  const [probing, setProbing] = useState(false);
 
   const camera = useCamera();
   const mic = useMicrophone();
@@ -447,17 +454,55 @@ export default function App() {
 
   const tabHintShown = useRef(false);
   const handleRecord = () => {
-    if (recorder.phase !== 'idle') return;
-    if (!mic.enabled) {
-      pushToast('Recording without microphone — tap the mic to add your voice.');
-    }
-    if (!tabHintShown.current) {
-      tabHintShown.current = true;
-      pushToast('Keep this tab visible while recording.');
-    }
-    setCollapsed(true);
-    recorder.start();
+    if (recorder.phase !== 'idle' || probing) return;
+    void (async () => {
+      // Gate recording behind the capability probe — cached after the first
+      // pass, so this is instant on every later take.
+      setProbing(true);
+      const result = await ensureDeviceProfile();
+      setProbing(false);
+      if (!result.ok) {
+        pushToast(result.reason);
+        return;
+      }
+      setDeviceProfile(result.profile);
+      if (!mic.enabled) {
+        pushToast('Recording without microphone — tap the mic to add your voice.');
+      }
+      if (!tabHintShown.current) {
+        tabHintShown.current = true;
+        pushToast('Keep this tab visible while recording.');
+      }
+      setCollapsed(true);
+      recorder.start();
+    })();
   };
+
+  const handleDeviceCheck = useCallback(() => {
+    void (async () => {
+      setProbing(true);
+      const result = await ensureDeviceProfile(true);
+      setProbing(false);
+      if (result.ok) {
+        setDeviceProfile(result.profile);
+        pushToast(
+          result.profile.warnings.length > 0
+            ? result.profile.warnings[0]
+            : 'Device check passed — this browser records fine.',
+        );
+      } else {
+        pushToast(result.reason);
+      }
+    })();
+  }, [pushToast]);
+
+  const deviceSummary = deviceProfile
+    ? `Records ${deviceProfile.mimeType.split(';')[0].split('/')[1]?.toUpperCase() ?? 'video'} · ${
+        deviceProfile.supports1080p ? 'up to 1080p' : '720p (compatibility)'
+      }${deviceProfile.pauseReliable ? '' : ' · pause unavailable'}`
+    : null;
+  // Until a probe says otherwise, offer pause (SPEC §6.5: hide when unreliable).
+  const pauseReliable = deviceProfile?.pauseReliable ?? true;
 
   // ---- camera / mic ----------------------------------------------------------
 
@@ -660,6 +705,9 @@ export default function App() {
           <SettingsMenu
             handedness={settings.handedness}
             onHandedness={(handedness) => updateSettings({ handedness })}
+            deviceSummary={deviceSummary}
+            deviceChecking={probing}
+            onDeviceCheck={handleDeviceCheck}
           />
         }
         onLibrary={activeBoardId ? handleOpenTakes : undefined}
@@ -671,8 +719,9 @@ export default function App() {
         onCamera={handleCameraButton}
         phase={recorder.phase}
         elapsedMs={recorder.elapsedMs}
-        onPause={recorder.pause}
-        onResume={recorder.resume}
+        probing={probing}
+        onPause={pauseReliable ? recorder.pause : undefined}
+        onResume={pauseReliable ? recorder.resume : undefined}
         onRecord={handleRecord}
         onCancelCountdown={recorder.cancelCountdown}
         onStop={recorder.stop}
