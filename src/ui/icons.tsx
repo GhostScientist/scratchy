@@ -225,6 +225,17 @@ export function LibraryIcon() {
   );
 }
 
+export function ImageIcon() {
+  return (
+    <Svg>
+      <rect x="3.5" y="4.5" width="17" height="15" rx="2.5" />
+      <circle cx="9" cy="10" r="1.7" />
+      <path d="M3.5 16.5l4.7-4.2a1.5 1.5 0 0 1 2 0l6.3 5.7" />
+      <path d="M14 14.5l2.3-2a1.5 1.5 0 0 1 2 0l2.2 2" />
+    </Svg>
+  );
+}
+
 export function DownloadIcon() {
   return (
     <Svg>

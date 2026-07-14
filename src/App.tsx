@@ -30,6 +30,8 @@ import {
 import type { BoardMeta, StoredTake } from './persistence/boards';
 import { BoardsMenu } from './ui/BoardsMenu';
 import { TakesDrawer } from './ui/TakesDrawer';
+import { ExportMenu } from './ui/ExportMenu';
+import { exportViewPng, exportBoardPng, downloadBlob } from './export/png';
 import { clamp } from './lib/geometry';
 import {
   STAGE_WIDTH,
@@ -300,6 +302,32 @@ export default function App() {
       pushToast('Board deleted.');
     },
     [handleCreateBoard, openBoard, pushToast],
+  );
+
+  // ---- PNG export ----------------------------------------------------------------
+
+  const handleExport = useCallback(
+    async (kind: 'view' | 'board') => {
+      const engine = engineRef.current;
+      const viewport = viewportRef.current;
+      if (!engine || !viewport) return;
+      const bg = stateRef.current.background;
+      const blob =
+        kind === 'view' ? await exportViewPng(engine, viewport, bg) : await exportBoardPng(engine, bg);
+      if (!blob) {
+        pushToast(
+          kind === 'board' ? 'Nothing to export — the board is empty.' : 'Export failed.',
+        );
+        return;
+      }
+      const slug =
+        lessonRef.current.title
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/(^-|-$)/g, '') || 'lesson';
+      downloadBlob(blob, `${slug}${kind === 'board' ? ' board' : ''}.png`);
+    },
+    [pushToast],
   );
 
   // ---- takes library -----------------------------------------------------------
@@ -573,6 +601,12 @@ export default function App() {
               onDelete={(id) => void handleDeleteBoard(id)}
             />
           )
+        }
+        exportSlot={
+          <ExportMenu
+            onExportView={() => void handleExport('view')}
+            onExportBoard={() => void handleExport('board')}
+          />
         }
         onLibrary={activeBoardId ? handleOpenTakes : undefined}
         micEnabled={mic.enabled}

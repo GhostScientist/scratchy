@@ -15,6 +15,8 @@ interface TopBarProps {
   onTitle(title: string): void;
   /** Boards flyout, present when multi-board storage is available. */
   boardsSlot?: ReactNode;
+  /** PNG export flyout. */
+  exportSlot?: ReactNode;
   /** Opens the saved-takes drawer; absent when takes can't persist. */
   onLibrary?: () => void;
   micEnabled: boolean;
@@ -72,6 +74,7 @@ export function TopBar(props: TopBarProps) {
       />
 
       <div className="top-actions">
+        {props.exportSlot}
         {props.onLibrary && (
           <button
             type="button"
