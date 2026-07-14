@@ -31,6 +31,9 @@ import type { BoardMeta, StoredTake } from './persistence/boards';
 import { BoardsMenu } from './ui/BoardsMenu';
 import { TakesDrawer } from './ui/TakesDrawer';
 import { ExportMenu } from './ui/ExportMenu';
+import { SettingsMenu } from './ui/SettingsMenu';
+import { loadSettings, saveSettings } from './settings/settings';
+import type { AppSettings } from './settings/settings';
 import { exportViewPng, exportBoardPng, downloadBlob } from './export/png';
 import { clamp } from './lib/geometry';
 import {
@@ -73,6 +76,17 @@ export default function App() {
   const [storageEstimate, setStorageEstimate] = useState<{ usage: number; quota: number } | null>(
     null,
   );
+  // Device-global preferences (handedness, recording preset) — localStorage,
+  // independent of the per-board lesson autosave.
+  const [settings, setSettings] = useState<AppSettings>(loadSettings);
+
+  const updateSettings = useCallback((patch: Partial<AppSettings>) => {
+    setSettings((current) => {
+      const next = { ...current, ...patch };
+      saveSettings(next);
+      return next;
+    });
+  }, []);
 
   const camera = useCamera();
   const mic = useMicrophone();
@@ -586,7 +600,7 @@ export default function App() {
     .join(' ');
 
   return (
-    <div className="app">
+    <div className={`app${settings.handedness === 'left' ? ' hand-left' : ''}`}>
       <TopBar
         title={title}
         onTitle={setTitle}
@@ -606,6 +620,12 @@ export default function App() {
           <ExportMenu
             onExportView={() => void handleExport('view')}
             onExportBoard={() => void handleExport('board')}
+          />
+        }
+        settingsSlot={
+          <SettingsMenu
+            handedness={settings.handedness}
+            onHandedness={(handedness) => updateSettings({ handedness })}
           />
         }
         onLibrary={activeBoardId ? handleOpenTakes : undefined}

@@ -17,6 +17,8 @@ interface TopBarProps {
   boardsSlot?: ReactNode;
   /** PNG export flyout. */
   exportSlot?: ReactNode;
+  /** Device settings flyout (handedness, recording preset). */
+  settingsSlot?: ReactNode;
   /** Opens the saved-takes drawer; absent when takes can't persist. */
   onLibrary?: () => void;
   micEnabled: boolean;
@@ -74,6 +76,7 @@ export function TopBar(props: TopBarProps) {
       />
 
       <div className="top-actions">
+        {props.settingsSlot}
         {props.exportSlot}
         {props.onLibrary && (
           <button

@@ -525,6 +525,42 @@ button:disabled {
   background: var(--panel-3);
 }
 
+/* ---- settings menu ------------------------------------------------------ */
+
+.settings-menu {
+  position: relative;
+}
+
+.settings-flyout {
+  min-width: 230px;
+  gap: 2px;
+}
+
+.settings-label {
+  padding: 6px 12px 3px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.settings-seg {
+  display: flex;
+  gap: 4px;
+}
+
+.settings-seg button {
+  flex: 1;
+  text-align: center;
+  color: var(--text-dim);
+}
+
+.settings-seg button.active {
+  background: var(--panel-3);
+  color: var(--text);
+}
+
 /* ---- takes drawer ------------------------------------------------------ */
 
 .takes-drawer {
@@ -753,6 +789,36 @@ button:disabled {
   height: 10px;
   border-radius: 50%;
   border: 1.5px solid var(--panel);
+}
+
+/* ---- left-handed layout ------------------------------------------------------ */
+/* SPEC §6.2/§7.2: configurable left or right toolbar placement. The rail,
+   its flyouts, the reserved stage gutter, and the nav aids all mirror. */
+
+.app.hand-left .rail,
+.app.hand-left .rail-handle {
+  left: auto;
+  right: 18px;
+}
+
+.app.hand-left .stage-fit {
+  margin: 14px 96px 22px 22px;
+}
+
+.app.hand-left .flyout {
+  left: auto;
+  right: calc(100% + 14px);
+  animation-name: flyout-in-left;
+}
+
+.app.hand-left .nav-aids {
+  right: auto;
+  left: 18px;
+  align-items: flex-start;
+}
+
+.app.hand-left .rail-collapse svg {
+  transform: scaleX(-1);
 }
 
 /* ---- flyouts ----------------------------------------------------------------- */
@@ -1143,6 +1209,17 @@ button:disabled {
   from {
     opacity: 0;
     transform: translateY(-50%) translateX(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(-50%) translateX(0);
+  }
+}
+
+@keyframes flyout-in-left {
+  from {
+    opacity: 0;
+    transform: translateY(-50%) translateX(6px);
   }
   to {
     opacity: 1;

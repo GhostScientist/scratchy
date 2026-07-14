@@ -236,6 +236,15 @@ export function ImageIcon() {
   );
 }
 
+export function GearIcon() {
+  return (
+    <Svg>
+      <circle cx="12" cy="12" r="3.2" />
+      <path d="M12 3.5v2.2M12 18.3v2.2M20.5 12h-2.2M5.7 12H3.5M18 6l-1.6 1.6M7.6 16.4L6 18M18 18l-1.6-1.6M7.6 7.6L6 6" />
+    </Svg>
+  );
+}
+
 export function DownloadIcon() {
   return (
     <Svg>
