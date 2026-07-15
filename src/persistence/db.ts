@@ -5,11 +5,13 @@
  */
 
 const DB_NAME = 'scratchy';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 export const STORE_BOARDS = 'boards';
 export const STORE_TAKES = 'takes';
 export const STORE_META = 'meta';
+/** Imported image/PDF-page bitmaps as Blobs, keyed by asset id (v3). */
+export const STORE_ASSETS = 'assets';
 /** In-flight/interrupted recording manifests, keyed by sessionId (v2). */
 export const STORE_REC_SESSIONS = 'recSessions';
 /** Recording chunks, keyed [sessionId, index] so a range read returns them in order (v2). */
@@ -45,6 +47,9 @@ function open(): Promise<IDBDatabase> {
         }
         if (!db.objectStoreNames.contains(STORE_REC_CHUNKS)) {
           db.createObjectStore(STORE_REC_CHUNKS, { keyPath: ['sessionId', 'index'] });
+        }
+        if (!db.objectStoreNames.contains(STORE_ASSETS)) {
+          db.createObjectStore(STORE_ASSETS, { keyPath: 'id' });
         }
       };
       req.onsuccess = () => resolve(req.result);

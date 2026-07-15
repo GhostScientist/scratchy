@@ -314,6 +314,43 @@ export function GearIcon() {
   );
 }
 
+export function UploadIcon() {
+  return (
+    <Svg>
+      <path d="M12 15V4" />
+      <path d="M7 8.5l5-5 5 5" />
+      <path d="M4.5 19.5h15" />
+    </Svg>
+  );
+}
+
+export function LockIcon() {
+  return (
+    <Svg width="16" height="16">
+      <rect x="5" y="10.5" width="14" height="9.5" rx="2" />
+      <path d="M8 10.5V7.5a4 4 0 0 1 8 0v3" />
+    </Svg>
+  );
+}
+
+export function UnlockIcon() {
+  return (
+    <Svg width="16" height="16">
+      <rect x="5" y="10.5" width="14" height="9.5" rx="2" />
+      <path d="M8 10.5V7.5a4 4 0 0 1 7.8-1.3" />
+    </Svg>
+  );
+}
+
+export function DuplicateIcon() {
+  return (
+    <Svg width="16" height="16">
+      <rect x="8" y="8" width="12" height="12" rx="2" />
+      <path d="M16 4.5H6.5A2.5 2.5 0 0 0 4 7v9.5" />
+    </Svg>
+  );
+}
+
 export function DownloadIcon() {
   return (
     <Svg>

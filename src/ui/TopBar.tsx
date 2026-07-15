@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { RecorderPhase } from '../recording/useRecorder';
 import {
@@ -9,6 +9,7 @@ import {
   MicOffIcon,
   PauseIcon,
   PlayIcon,
+  UploadIcon,
 } from './icons';
 
 export function formatDuration(ms: number): string {
@@ -29,6 +30,8 @@ interface TopBarProps {
   settingsSlot?: ReactNode;
   /** Opens the saved-takes drawer; absent when takes can't persist. */
   onLibrary?: () => void;
+  /** Import images/PDFs; absent when assets can't persist (no IndexedDB). */
+  onImportFiles?: (files: File[]) => void;
   micEnabled: boolean;
   micMuted: boolean;
   onMic(): void;
@@ -49,6 +52,7 @@ interface TopBarProps {
 
 export function TopBar(props: TopBarProps) {
   const [confirmStop, setConfirmStop] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const { phase } = props;
   const recordingActive = phase === 'recording' || phase === 'paused' || phase === 'stopping';
 
@@ -89,6 +93,32 @@ export function TopBar(props: TopBarProps) {
       />
 
       <div className="top-actions">
+        {props.onImportFiles && (
+          <>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*,application/pdf"
+              multiple
+              hidden
+              onChange={(e) => {
+                const files = [...(e.target.files ?? [])];
+                // Allow re-picking the same file later.
+                e.target.value = '';
+                if (files.length > 0) props.onImportFiles?.(files);
+              }}
+            />
+            <button
+              type="button"
+              className="pill"
+              aria-label="Import image or PDF"
+              title="Import image or PDF"
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <UploadIcon />
+            </button>
+          </>
+        )}
         {props.settingsSlot}
         {props.exportSlot}
         {props.onLibrary && (

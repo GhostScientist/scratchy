@@ -9,7 +9,8 @@
 import { drawStroke, strokeBBox } from './strokes';
 import type { BBox } from './strokes';
 import { distPointToSegment } from './geometry';
-import type { BoardElement, ShapeElement, TextElement } from '../types';
+import { getImageBitmap } from './imageCache';
+import type { BoardElement, ImageElement, ShapeElement, TextElement } from '../types';
 
 export const TEXT_LINE_HEIGHT = 1.3;
 
@@ -93,6 +94,17 @@ function measureText(el: TextElement): TextMetricsBox {
   return box;
 }
 
+/** Neutral placeholder while an image asset is still decoding (or gone). */
+function drawImagePlaceholder(ctx: CanvasRenderingContext2D, el: ImageElement): void {
+  ctx.save();
+  ctx.fillStyle = 'rgba(154, 160, 170, 0.18)';
+  ctx.fillRect(el.x, el.y, el.w, el.h);
+  ctx.strokeStyle = 'rgba(154, 160, 170, 0.6)';
+  ctx.lineWidth = Math.max(1, Math.min(el.w, el.h) * 0.01);
+  ctx.strokeRect(el.x, el.y, el.w, el.h);
+  ctx.restore();
+}
+
 /**
  * Set `cache` for committed elements only — the in-progress element mutates
  * between draws.
@@ -104,6 +116,15 @@ export function drawElement(
 ): void {
   if (el.kind === 'stroke') {
     drawStroke(ctx, el, cache);
+    return;
+  }
+  if (el.kind === 'image') {
+    const bitmap = getImageBitmap(el.assetId);
+    if (bitmap) {
+      ctx.drawImage(bitmap, el.x, el.y, el.w, el.h);
+    } else {
+      drawImagePlaceholder(ctx, el);
+    }
     return;
   }
   ctx.save();
@@ -141,6 +162,10 @@ const textBBoxCache = new WeakMap<TextElement, BBox>();
 
 export function elementBBox(el: BoardElement): BBox {
   if (el.kind === 'stroke') return strokeBBox(el);
+  if (el.kind === 'image') {
+    // Trivial to compute — no cache needed (and no WeakMap staleness risk).
+    return { minX: el.x, minY: el.y, maxX: el.x + el.w, maxY: el.y + el.h };
+  }
   if (el.kind === 'shape') {
     const cached = shapeBBoxCache.get(el);
     if (cached) return cached;
@@ -163,11 +188,23 @@ export function elementVisualPad(el: BoardElement): number {
   if (el.kind === 'shape') {
     return el.shape === 'arrow' ? Math.max(el.strokeWidth * 3.5, 10) : el.strokeWidth;
   }
+  if (el.kind === 'image') return 0;
   return 2;
 }
 
 /** Points that stand in for the element in hit tests and lasso containment. */
 export function elementSamplePoints(el: BoardElement): { x: number; y: number }[] {
+  if (el.kind === 'image') {
+    // 3×3 grid: interior points let an eraser swipe across the middle hit,
+    // and give lasso containment a meaningful majority.
+    const out: { x: number; y: number }[] = [];
+    for (let ix = 0; ix <= 2; ix++) {
+      for (let iy = 0; iy <= 2; iy++) {
+        out.push({ x: el.x + (el.w * ix) / 2, y: el.y + (el.h * iy) / 2 });
+      }
+    }
+    return out;
+  }
   if (el.kind === 'stroke') {
     const pts = el.points;
     const stride = Math.max(1, Math.floor(pts.length / 16));
@@ -233,6 +270,12 @@ export function hitTestElement(
     Math.min(from.y, to.y) > box.maxY + reach
   ) {
     return false;
+  }
+  if (el.kind === 'image') {
+    // Solid rect: an endpoint landing inside is a hit regardless of samples.
+    const inside = (p: { x: number; y: number }) =>
+      p.x >= box.minX && p.x <= box.maxX && p.y >= box.minY && p.y <= box.maxY;
+    if (inside(from) || inside(to)) return true;
   }
   return elementSamplePoints(el).some(
     (p) => distPointToSegment(p.x, p.y, from.x, from.y, to.x, to.y) <= reach,

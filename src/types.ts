@@ -75,9 +75,47 @@ export interface TextElement {
   fontSize: number;
 }
 
+/** A bitmap placed on the board. Pixels live in the IndexedDB assets store;
+ *  the element only carries the reference plus its world rect. */
+export interface ImageElement {
+  kind: 'image';
+  id: string;
+  /** Key into the assets store (persistence/assets.ts). */
+  assetId: string;
+  /** Top-left corner in world coordinates; w/h are always positive. */
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  /** Intrinsic pixel size — keeps resize aspect-true and sizes placeholders. */
+  naturalW: number;
+  naturalH: number;
+  /** Locked images ignore move/erase/lasso/clear — annotations go over them.
+   *  PDF slide backdrops import locked. */
+  locked?: boolean;
+}
+
 /** Everything that lives in the board document, discriminated by `kind`.
  *  Pre-element saves lack the field; loaders normalize it to 'stroke'. */
-export type BoardElement = Stroke | ShapeElement | TextElement;
+export type BoardElement = Stroke | ShapeElement | TextElement | ImageElement;
+
+/** Only images can be locked today, but every interaction gate asks through
+ *  this helper so the rule lives in one place. */
+export function isLocked(el: BoardElement): boolean {
+  return el.kind === 'image' && el.locked === true;
+}
+
+/** One slide of a board. Each page keeps its own viewport so flipping back
+ *  to a slide shows it framed the way you left it. */
+export interface BoardPage {
+  id: string;
+  elements: BoardElement[];
+  viewport: ViewportState;
+}
+
+export function blankPage(): BoardPage {
+  return { id: nextId('pg'), elements: [], viewport: { ...DEFAULT_VIEWPORT } };
+}
 
 export interface CameraLayout {
   x: number;

@@ -140,7 +140,10 @@ test('viewport survives a reload via autosave', async ({ page }) => {
         const boards = await api.listBoards();
         if (boards.length !== 1) return false;
         const board = await api.loadBoard(boards[0].id);
-        return board !== null && board.viewport.x === 640 && board.strokes.length === 1;
+        if (board === null) return false;
+        // v5 boards store content per page.
+        const page0 = board.pages[0];
+        return page0.viewport.x === 640 && page0.elements.length === 1;
       }),
     )
     .toBe(true);

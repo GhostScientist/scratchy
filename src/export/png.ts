@@ -1,5 +1,6 @@
 import { drawBackground } from '../lib/backgrounds';
 import { drawElement, elementBBox, elementVisualPad } from '../lib/elements';
+import { preloadImages } from '../lib/imageCache';
 import type { InkEngine } from '../ink/InkEngine';
 import type { Viewport } from '../ink/Viewport';
 import { STAGE_WIDTH, STAGE_HEIGHT } from '../types';
@@ -22,6 +23,8 @@ async function renderPng(
   outH: number,
   outScale: number,
 ): Promise<Blob | null> {
+  // Image assets decode async; an export must never contain placeholders.
+  await preloadImages(elements);
   const canvas = document.createElement('canvas');
   canvas.width = Math.round(outW * outScale);
   canvas.height = Math.round(outH * outScale);
