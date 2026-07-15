@@ -47,7 +47,8 @@ installable/offline behavior against `vite preview`.
 - **Background removal (cutout)** — the fourth camera shape segments you out
   of your background (MediaPipe selfie segmentation, lazy-loaded, wasm + model
   bundled so it works offline — no CDN, nothing uploaded) and layers you
-  directly over the board. Runs inference at ~15 fps with a runtime
+  directly over the board. The feed is composited at full display rate; the
+  mask refreshes at ~30 fps on a downscaled frame, with a runtime
   performance watchdog that reverts to the rounded frame on hardware that
   can't keep up. The model is committed at `src/assets/selfie_segmenter.tflite`
   (Apache-2.0; re-fetch with `npm run fetch:model -- --force`).

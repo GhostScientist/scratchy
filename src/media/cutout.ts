@@ -5,14 +5,20 @@
  * with the background removed. Consumers (the DOM preview and the recording
  * Compositor) only ever read that canvas; they never wait on inference.
  *
- * Inference runs at ~15 fps and the mask is composited immediately at that
- * rate — reusing a stale mask over newer video frames would ghost at the
- * edges, and at 15 fps the person moves little enough between masks.
+ * Two independent rates keep the feed smooth:
+ *  - The cutout canvas is composited every display frame (video at full
+ *    rate, carved by the latest mask) — two GPU drawImages, no readback.
+ *  - Inference runs at ~30 fps on a downscaled copy of the frame. MediaPipe
+ *    returns the mask at input resolution and resamples to 256×256
+ *    internally anyway, so segmenting a ~256-wide canvas costs a fraction
+ *    of a full-resolution readback with no quality loss. A slow device
+ *    self-throttles to fewer mask updates while the video stays fluid.
  *
- * The engine watches its own cost: if the median inference+composite time
- * stays over budget, it reports a performance fallback so the app can leave
- * cutout mode. The record-time capability probe can't cover this — the
- * camera runs without recording — so the check lives here.
+ * The engine watches its own cost: if the median inference time stays over
+ * budget (mask lag bad enough to look broken), it reports a performance
+ * fallback so the app can leave cutout mode. The record-time capability
+ * probe can't cover this — the camera runs without recording — so the
+ * check lives here.
  */
 
 import type { ImageSegmenter, ImageSegmenterResult } from '@mediapipe/tasks-vision';
@@ -25,17 +31,21 @@ export interface CutoutCallbacks {
   onPerformanceFallback(): void;
 }
 
-/** ~15 fps inference; plenty for a talking head, cheap enough for tablets. */
-const INFERENCE_INTERVAL_MS = 66;
-/** Median inference+composite budget; sustained misses trigger the fallback. */
-const DEFAULT_BUDGET_MS = 40;
+/** ~30 fps mask updates; the composite itself runs every display frame. */
+const INFERENCE_INTERVAL_MS = 33;
+/** Segmentation input width — matches the model's internal working size. */
+const INFER_WIDTH = 256;
+/** Median inference budget. Misses only degrade the mask rate (the loop
+ *  self-throttles), so the hard revert fires only when even the lagging
+ *  mask would look broken. */
+const DEFAULT_BUDGET_MS = 80;
 /** Samples per watchdog window. */
 const PERF_WINDOW = 30;
 /** First inferences include wasm/GPU warmup — never judge them. */
 const PERF_WARMUP = 5;
 /** Temporal mask smoothing: new*0.7 + previous*0.3 kills edge flicker. */
 const MASK_BLEND = 0.7;
-/** Extra edge feather when stamping the mask, in destination pixels. */
+/** Edge feather, baked into the full-size mask once per inference. */
 const MASK_FEATHER_PX = 3;
 
 // Dev/test hooks (wired to window.__scratchyCutout in useCutout): let e2e
@@ -50,12 +60,20 @@ export function setDevForceFailure(fail: boolean): void {
 }
 
 export class CutoutEngine {
-  /** Video-sized RGBA frame with the background removed. 0×0 until ready. */
+  /** Video-sized RGBA frame with the background removed. 0×0 until the
+   *  first mask lands. */
   readonly canvas: HTMLCanvasElement;
 
   private ctx: CanvasRenderingContext2D;
+  /** Downscaled video frame handed to the segmenter. */
+  private inferCanvas: HTMLCanvasElement;
+  private inferCtx: CanvasRenderingContext2D;
+  /** Raw mask alpha at inference size. */
   private maskCanvas: HTMLCanvasElement;
   private maskCtx: CanvasRenderingContext2D;
+  /** Video-sized, feathered mask the per-frame composite stamps with. */
+  private maskFull: HTMLCanvasElement;
+  private maskFullCtx: CanvasRenderingContext2D;
   private maskImage: ImageData | null = null;
   private prevMask: Float32Array | null = null;
 
@@ -71,12 +89,20 @@ export class CutoutEngine {
 
   constructor(private cb: CutoutCallbacks) {
     this.canvas = document.createElement('canvas');
+    this.inferCanvas = document.createElement('canvas');
     this.maskCanvas = document.createElement('canvas');
+    this.maskFull = document.createElement('canvas');
     const ctx = this.canvas.getContext('2d');
+    const inferCtx = this.inferCanvas.getContext('2d');
     const maskCtx = this.maskCanvas.getContext('2d');
-    if (!ctx || !maskCtx) throw new Error('Canvas 2D is not available');
+    const maskFullCtx = this.maskFull.getContext('2d');
+    if (!ctx || !inferCtx || !maskCtx || !maskFullCtx) {
+      throw new Error('Canvas 2D is not available');
+    }
     this.ctx = ctx;
+    this.inferCtx = inferCtx;
     this.maskCtx = maskCtx;
+    this.maskFullCtx = maskFullCtx;
   }
 
   getState(): CutoutState {
@@ -161,17 +187,31 @@ export class CutoutEngine {
     this.raf = requestAnimationFrame(this.tick);
     const video = this.video;
     if (!video || video.readyState < 2 || video.videoWidth === 0) return;
+    this.maybeInfer(video);
+    this.compositeFrame(video);
+  };
+
+  /** Refresh the mask at inference rate on a downscaled frame. */
+  private maybeInfer(video: HTMLVideoElement): void {
     const now = performance.now();
     if (now - this.lastInferenceAt < INFERENCE_INTERVAL_MS) return;
     if (video.currentTime === this.lastVideoTime) return;
     this.lastInferenceAt = now;
     this.lastVideoTime = video.currentTime;
 
+    const iw = Math.min(INFER_WIDTH, video.videoWidth);
+    const ih = Math.max(1, Math.round((iw * video.videoHeight) / video.videoWidth));
+    if (this.inferCanvas.width !== iw || this.inferCanvas.height !== ih) {
+      this.inferCanvas.width = iw;
+      this.inferCanvas.height = ih;
+    }
+    this.inferCtx.drawImage(video, 0, 0, iw, ih);
+
     const t0 = performance.now();
     try {
       // The callback runs synchronously; the mask is only valid inside it.
-      this.segmenter!.segmentForVideo(video, now, (result) => {
-        this.composite(result, video);
+      this.segmenter!.segmentForVideo(this.inferCanvas, now, (result) => {
+        this.refreshMask(result, video);
       });
     } catch {
       this.dispose();
@@ -179,9 +219,9 @@ export class CutoutEngine {
       return;
     }
     this.recordSample(performance.now() - t0);
-  };
+  }
 
-  private composite(result: ImageSegmenterResult, video: HTMLVideoElement): void {
+  private refreshMask(result: ImageSegmenterResult, video: HTMLVideoElement): void {
     const masks = result.confidenceMasks;
     const mask = masks?.[masks.length - 1];
     if (!mask) return;
@@ -209,6 +249,25 @@ export class CutoutEngine {
     }
     this.maskCtx.putImageData(this.maskImage, 0, 0);
 
+    // Upscale + feather once per inference so the per-frame composite is
+    // two plain drawImages.
+    const vw = video.videoWidth;
+    const vh = video.videoHeight;
+    if (this.maskFull.width !== vw || this.maskFull.height !== vh) {
+      this.maskFull.width = vw;
+      this.maskFull.height = vh;
+    }
+    const full = this.maskFullCtx;
+    full.clearRect(0, 0, vw, vh);
+    full.save();
+    full.filter = `blur(${MASK_FEATHER_PX}px)`;
+    full.drawImage(this.maskCanvas, 0, 0, vw, vh);
+    full.restore();
+  }
+
+  /** Every display frame: current video frame carved by the latest mask. */
+  private compositeFrame(video: HTMLVideoElement): void {
+    if (this.maskFull.width === 0) return;
     const vw = video.videoWidth;
     const vh = video.videoHeight;
     if (this.canvas.width !== vw || this.canvas.height !== vh) {
@@ -221,8 +280,9 @@ export class CutoutEngine {
     ctx.drawImage(video, 0, 0, vw, vh);
     ctx.save();
     ctx.globalCompositeOperation = 'destination-in';
-    ctx.filter = `blur(${MASK_FEATHER_PX}px)`;
-    ctx.drawImage(this.maskCanvas, 0, 0, vw, vh);
+    // Mid-resize the mask can be one video-size behind; stretching it for a
+    // frame beats flashing the unmasked feed.
+    ctx.drawImage(this.maskFull, 0, 0, vw, vh);
     ctx.restore();
   }
 
