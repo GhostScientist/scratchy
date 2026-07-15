@@ -1083,6 +1083,44 @@ button:disabled {
   box-shadow: none;
 }
 
+/* Cutout mode: the person floats straight over the board — no box. */
+.cam-frame.is-cutout {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.cam-cutout-mount {
+  position: absolute;
+  inset: 0;
+}
+
+.cam-cutout-mount canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  pointer-events: none;
+}
+
+.cam-loading {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 3px solid rgba(255, 255, 255, 0.25);
+  border-top-color: #fff;
+  animation: cam-spin 800ms linear infinite;
+}
+
+@keyframes cam-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .cam-frame video {
   display: block;
   width: 100%;
@@ -1145,6 +1183,16 @@ button:disabled {
 .cam-btn.active {
   background: var(--panel-3);
   color: var(--text);
+}
+
+.cam-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.cam-btn:disabled:hover {
+  background: transparent;
+  color: var(--text-dim);
 }
 
 .cam-sep {

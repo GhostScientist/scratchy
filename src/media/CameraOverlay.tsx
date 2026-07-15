@@ -8,7 +8,15 @@ import {
   cameraAspectFor,
 } from '../types';
 import type { CameraLayout, CameraShape } from '../types';
-import { ShapeCircleIcon, ShapeRoundedIcon, ShapeRectIcon, MirrorIcon, CloseIcon } from '../ui/icons';
+import type { CutoutState } from './cutout';
+import {
+  ShapeCircleIcon,
+  ShapeRoundedIcon,
+  ShapeRectIcon,
+  ShapePersonIcon,
+  MirrorIcon,
+  CloseIcon,
+} from '../ui/icons';
 
 interface CameraOverlayProps {
   stream: MediaStream;
@@ -19,6 +27,10 @@ interface CameraOverlayProps {
   scaleRef: { current: number };
   videoElRef: { current: HTMLVideoElement | null };
   recording: boolean;
+  cutoutState: CutoutState;
+  /** Cutout is known broken/slow here — the shape button renders disabled. */
+  cutoutBlocked: boolean;
+  getCutoutCanvas(): HTMLCanvasElement | null;
   onLayoutChange(layout: CameraLayout): void;
   onShape(shape: CameraShape): void;
   onMirror(): void;
@@ -37,6 +49,7 @@ const SHAPES: { shape: CameraShape; label: string; Icon: typeof ShapeCircleIcon 
   { shape: 'circle', label: 'Circle camera', Icon: ShapeCircleIcon },
   { shape: 'rounded', label: 'Rounded camera', Icon: ShapeRoundedIcon },
   { shape: 'rect', label: 'Rectangular camera', Icon: ShapeRectIcon },
+  { shape: 'cutout', label: 'Cutout camera (remove background)', Icon: ShapePersonIcon },
 ];
 
 function borderRadiusFor(layout: CameraLayout): string {
@@ -131,8 +144,23 @@ export function CameraOverlay(props: CameraOverlayProps) {
     props.onLayoutChange(props.layoutRef.current);
   };
 
+  // The engine owns the cutout canvas; this ref callback adopts it into the
+  // frame whenever the mount div is (re)rendered. React removes it with the
+  // div, and the engine keeps painting the same element either way.
+  const cutoutMount = useCallback(
+    (el: HTMLDivElement | null) => {
+      if (!el) return;
+      const canvas = props.getCutoutCanvas();
+      if (canvas && canvas.parentElement !== el) el.appendChild(canvas);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [props.getCutoutCanvas],
+  );
+
   const { layout, recording } = props;
   const controlsBelow = layout.y + layout.height + 60 <= STAGE_HEIGHT;
+  const cutoutLive = layout.shape === 'cutout' && props.cutoutState === 'ready';
+  const cutoutLoading = layout.shape === 'cutout' && props.cutoutState === 'loading';
 
   return (
     <div
@@ -144,14 +172,31 @@ export function CameraOverlay(props: CameraOverlayProps) {
       onPointerUp={endGesture}
       onPointerCancel={endGesture}
     >
-      <div ref={frameRef} className="cam-frame" style={{ borderRadius: borderRadiusFor(layout) }}>
+      <div
+        ref={frameRef}
+        className={`cam-frame${cutoutLive ? ' is-cutout' : ''}`}
+        style={{ borderRadius: borderRadiusFor(layout) }}
+      >
         <video
           ref={videoCallback}
           autoPlay
           playsInline
           muted
-          style={{ transform: layout.mirrored ? 'scaleX(-1)' : undefined }}
+          style={{
+            transform: layout.mirrored ? 'scaleX(-1)' : undefined,
+            // Keep the video playing (the segmenter reads it) but let the
+            // cutout canvas take over the visible frame.
+            display: cutoutLive ? 'none' : undefined,
+          }}
         />
+        {cutoutLive && (
+          <div
+            className="cam-cutout-mount"
+            ref={cutoutMount}
+            style={{ transform: layout.mirrored ? 'scaleX(-1)' : undefined }}
+          />
+        )}
+        {cutoutLoading && <div className="cam-loading" aria-hidden="true" />}
       </div>
       {!recording && (
         <>
@@ -164,18 +209,23 @@ export function CameraOverlay(props: CameraOverlayProps) {
             className={`cam-controls ${controlsBelow ? 'below' : 'above'}`}
             onPointerDown={(e) => e.stopPropagation()}
           >
-            {SHAPES.map(({ shape, label, Icon }) => (
-              <button
-                key={shape}
-                type="button"
-                className={`cam-btn${layout.shape === shape ? ' active' : ''}`}
-                aria-label={label}
-                title={label}
-                onClick={() => props.onShape(shape)}
-              >
-                <Icon />
-              </button>
-            ))}
+            {SHAPES.map(({ shape, label, Icon }) => {
+              const blocked = shape === 'cutout' && props.cutoutBlocked;
+              const title = blocked ? 'Background removal is unavailable on this device' : label;
+              return (
+                <button
+                  key={shape}
+                  type="button"
+                  className={`cam-btn${layout.shape === shape ? ' active' : ''}`}
+                  aria-label={title}
+                  title={title}
+                  disabled={blocked}
+                  onClick={() => props.onShape(shape)}
+                >
+                  <Icon />
+                </button>
+              );
+            })}
             <span className="cam-sep" />
             <button
               type="button"

@@ -27,7 +27,7 @@ export const MIN_ZOOM = 0.1;
 export const MAX_ZOOM = 8;
 export const DEFAULT_VIEWPORT: ViewportState = { x: 0, y: 0, zoom: 1 };
 export type BackgroundKind = 'white' | 'dark' | 'grid' | 'dots';
-export type CameraShape = 'circle' | 'rounded' | 'rect';
+export type CameraShape = 'circle' | 'rounded' | 'rect' | 'cutout';
 
 export interface StrokePoint {
   x: number;

@@ -19,6 +19,8 @@ export interface CompositorSources {
   getLaserTrail(): readonly LaserPoint[];
   /** null when the camera is off or hidden */
   getVideo(): HTMLVideoElement | null;
+  /** Background-removed camera frame; null unless the cutout shape is live. */
+  getCutoutCanvas(): HTMLCanvasElement | null;
   getCameraLayout(): CameraLayout;
 }
 
@@ -131,20 +133,23 @@ export class Compositor {
         width: src.width * crop.scale,
         height: src.height * crop.scale,
       };
+      // Cutout mode draws the background-removed canvas unclipped — the
+      // alpha channel is the mask. Before the first segmented frame lands
+      // (canvas still 0×0) fall back to the raw video in a plain rect,
+      // matching the DOM preview; the recording never waits on inference.
+      const cutout = src.shape === 'cutout' ? this.sources.getCutoutCanvas() : null;
+      const frame = cutout && cutout.width > 0 && cutout.height > 0 ? cutout : video;
+      const frameW = frame === video ? video.videoWidth : cutout!.width;
+      const frameH = frame === video ? video.videoHeight : cutout!.height;
       ctx.save();
-      ctx.clip(cameraClipPath(layout));
-      const { sx, sy, sw, sh } = coverCrop(
-        video.videoWidth,
-        video.videoHeight,
-        layout.width,
-        layout.height,
-      );
+      if (frame === video) ctx.clip(cameraClipPath(layout));
+      const { sx, sy, sw, sh } = coverCrop(frameW, frameH, layout.width, layout.height);
       if (layout.mirrored) {
         ctx.translate(layout.x + layout.width, layout.y);
         ctx.scale(-1, 1);
-        ctx.drawImage(video, sx, sy, sw, sh, 0, 0, layout.width, layout.height);
+        ctx.drawImage(frame, sx, sy, sw, sh, 0, 0, layout.width, layout.height);
       } else {
-        ctx.drawImage(video, sx, sy, sw, sh, layout.x, layout.y, layout.width, layout.height);
+        ctx.drawImage(frame, sx, sy, sw, sh, layout.x, layout.y, layout.width, layout.height);
       }
       ctx.restore();
     }
