@@ -67,15 +67,17 @@ export function Minimap({ engine, viewport, background, revision }: MinimapProps
     ctx.lineCap = 'round';
     for (const el of engine.getElements()) {
       const box = elementBBox(el);
+      // Images carry no color of their own — sketch them in neutral gray.
+      const color = el.kind === 'image' ? '#9aa0aa' : el.color;
       // Sub-pixel elements: a dot is cheaper and reads better.
       if ((box.maxX - box.minX) * scale < 1.5 && (box.maxY - box.minY) * scale < 1.5) {
-        ctx.fillStyle = el.color;
+        ctx.fillStyle = color;
         ctx.globalAlpha = 0.9;
         ctx.fillRect(mapX(box.minX) - 0.75, mapY(box.minY) - 0.75, 1.5, 1.5);
         continue;
       }
       if (el.kind !== 'stroke') {
-        ctx.strokeStyle = el.color;
+        ctx.strokeStyle = color;
         ctx.globalAlpha = ('opacity' in el ? el.opacity : 1) * 0.9;
         ctx.strokeRect(
           mapX(box.minX),

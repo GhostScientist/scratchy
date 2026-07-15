@@ -12,16 +12,34 @@ import { elementInPolygon } from '../lib/lasso';
 import type { LassoPoint } from '../lib/lasso';
 import { drawLaserTrail, pruneLaserTrail } from '../lib/laser';
 import type { LaserPoint } from '../lib/laser';
-import { STAGE_WIDTH, STAGE_HEIGHT, BACKING_SCALE, nextId } from '../types';
-import type { BoardElement, ShapeElement, ShapeKind, Stroke, TextElement, Tool } from '../types';
+import { onImageCacheChange } from '../lib/imageCache';
+import { STAGE_WIDTH, STAGE_HEIGHT, BACKING_SCALE, isLocked, nextId } from '../types';
+import type {
+  BoardElement,
+  ImageElement,
+  ShapeElement,
+  ShapeKind,
+  Stroke,
+  TextElement,
+  Tool,
+} from '../types';
 import type { Viewport, Point } from './Viewport';
+
+/** World-space rect snapshot for image resize undo. */
+interface Rect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
 
 type Command =
   | { type: 'add'; element: BoardElement }
   | { type: 'erase'; entries: { index: number; element: BoardElement }[] }
-  | { type: 'clear'; elements: BoardElement[] }
   | { type: 'move'; ids: string[]; dx: number; dy: number }
-  | { type: 'setText'; id: string; before: string; after: string };
+  | { type: 'setText'; id: string; before: string; after: string }
+  | { type: 'resize'; id: string; before: Rect; after: Rect }
+  | { type: 'setLocked'; ids: string[]; locked: boolean };
 
 export interface TextEditRequest {
   /** Existing element being edited, or null to create new text at `world`. */
@@ -35,15 +53,42 @@ export interface InkEngineCallbacks {
   onCommit(): void;
   /** The text tool tapped the board — the host shows a DOM editor. */
   onTextEdit(request: TextEditRequest): void;
+  /** Selection changed (or a selected element's rect/lock settled) — the
+   *  host repositions its selection-actions overlay. */
+  onSelectionChange(): void;
+}
+
+/** What the host needs to render selection actions (lock/unlock overlay). */
+export interface SelectionInfo {
+  ids: string[];
+  /** Union bbox in world coordinates, null when nothing is selected. */
+  bbox: BBox | null;
+  /** Image elements inside the selection (lock/unlock targets). */
+  images: ImageElement[];
 }
 
 const ERASER_RADIUS = 20;
+/** Stage-px reach of an image resize corner handle. */
+const HANDLE_REACH = 12;
+/** Smallest world-px edge an image can be resized down to. */
+const MIN_IMAGE_SIZE = 8;
+/** A lasso whose whole extent stays under this many stage px is a tap. */
+const LASSO_TAP_PX = 6;
 /** A touch that lands this soon after another may convert the gesture to pan. */
 const PAN_TAKEOVER_MS = 150;
 /** ...but only while the provisional stroke is still short (stage px). */
 const PAN_TAKEOVER_TRAVEL_PX = 12;
 
-type Mode = 'idle' | 'stroke' | 'erase' | 'pan' | 'laser' | 'shape' | 'lasso' | 'select-move';
+type Mode =
+  | 'idle'
+  | 'stroke'
+  | 'erase'
+  | 'pan'
+  | 'laser'
+  | 'shape'
+  | 'lasso'
+  | 'select-move'
+  | 'select-resize';
 
 /**
  * Imperative ink core. Owns the committed-ink cache canvas and the
@@ -76,6 +121,12 @@ export class InkEngine {
   private moveDx = 0;
   private moveDy = 0;
 
+  /** Live image resize: the dragged element, its pre-drag rect, and the
+   *  fixed opposite corner (world coordinates). */
+  private resizeId: string | null = null;
+  private resizeBefore: Rect | null = null;
+  private resizeAnchor: Point | null = null;
+
   /** Element hidden from the ink cache while a DOM text editor covers it. */
   private hiddenElementId: string | null = null;
 
@@ -105,6 +156,7 @@ export class InkEngine {
   private cacheDirty = false;
   private destroyed = false;
   private unsubscribeViewport: () => void;
+  private unsubscribeImageCache: () => void;
 
   constructor(
     private inkCanvas: HTMLCanvasElement,
@@ -128,12 +180,18 @@ export class InkEngine {
       this.cacheDirty = true;
       this.requestRepaint();
     });
+    // Image assets decode async — repaint committed ink once pixels arrive.
+    this.unsubscribeImageCache = onImageCacheChange(() => {
+      this.cacheDirty = true;
+      this.requestRepaint();
+    });
   }
 
   destroy(): void {
     this.destroyed = true;
     cancelAnimationFrame(this.raf);
     this.unsubscribeViewport();
+    this.unsubscribeImageCache();
     const el = this.activeCanvas;
     el.removeEventListener('pointerdown', this.onPointerDown);
     el.removeEventListener('pointermove', this.onPointerMove);
@@ -159,6 +217,7 @@ export class InkEngine {
     if (this.tool === 'select' && tool !== 'select') {
       this.selectedIds.clear();
       this.lassoPoints = [];
+      this.notifySelection();
     }
     this.tool = tool;
     this.color = color;
@@ -201,8 +260,19 @@ export class InkEngine {
         }
         break;
       }
-      case 'clear': {
-        this.elements = invert ? cmd.elements : [];
+      case 'resize': {
+        const rect = invert ? cmd.before : cmd.after;
+        this.elements = this.elements.map((el) =>
+          el.id === cmd.id && el.kind === 'image' ? { ...el, ...rect } : el,
+        );
+        break;
+      }
+      case 'setLocked': {
+        const locked = invert ? !cmd.locked : cmd.locked;
+        const set = new Set(cmd.ids);
+        this.elements = this.elements.map((el) =>
+          set.has(el.id) && el.kind === 'image' ? { ...el, locked } : el,
+        );
         break;
       }
       case 'move': {
@@ -230,6 +300,7 @@ export class InkEngine {
     this.applyCommand(cmd, true);
     this.redoStack.push(cmd);
     this.selectedIds.clear();
+    this.notifySelection();
     this.afterDocumentChange();
   }
 
@@ -239,15 +310,24 @@ export class InkEngine {
     this.applyCommand(cmd, false);
     this.undoStack.push(cmd);
     this.selectedIds.clear();
+    this.notifySelection();
     this.afterDocumentChange();
   }
 
   clear(): void {
-    if (this.elements.length === 0) return;
-    this.undoStack.push({ type: 'clear', elements: this.elements });
+    // Clearing is an erase of everything unlocked: locked backdrops (PDF
+    // slides) survive so "clear" wipes the annotations, not the slide.
+    const entries: { index: number; element: BoardElement }[] = [];
+    for (let i = this.elements.length - 1; i >= 0; i--) {
+      if (isLocked(this.elements[i])) continue;
+      entries.push({ index: i, element: this.elements[i] });
+      this.elements.splice(i, 1);
+    }
+    if (entries.length === 0) return;
+    this.undoStack.push({ type: 'erase', entries });
     this.redoStack = [];
-    this.elements = [];
     this.selectedIds.clear();
+    this.notifySelection();
     // Deliberately leaves the viewport alone: clearing removes content,
     // it is not a navigation action.
     this.afterDocumentChange();
@@ -259,6 +339,7 @@ export class InkEngine {
     this.undoStack = [];
     this.redoStack = [];
     this.selectedIds.clear();
+    this.notifySelection();
     this.hiddenElementId = null;
     this.rebuildInkCache();
     this.cb.onHistoryChange(false, false);
@@ -287,9 +368,32 @@ export class InkEngine {
     return [...this.selectedIds];
   }
 
+  getSelectionInfo(): SelectionInfo {
+    const ids: string[] = [];
+    const images: ImageElement[] = [];
+    let bbox: BBox | null = null;
+    for (const el of this.elements) {
+      if (!this.selectedIds.has(el.id)) continue;
+      ids.push(el.id);
+      if (el.kind === 'image') images.push(el);
+      const box = elementBBox(el);
+      const pad = elementVisualPad(el);
+      if (!bbox) {
+        bbox = { minX: box.minX - pad, minY: box.minY - pad, maxX: box.maxX + pad, maxY: box.maxY + pad };
+      } else {
+        bbox.minX = Math.min(bbox.minX, box.minX - pad);
+        bbox.minY = Math.min(bbox.minY, box.minY - pad);
+        bbox.maxX = Math.max(bbox.maxX, box.maxX + pad);
+        bbox.maxY = Math.max(bbox.maxY, box.maxY + pad);
+      }
+    }
+    return { ids, bbox, images };
+  }
+
   clearSelection(): void {
     if (this.selectedIds.size === 0) return;
     this.selectedIds.clear();
+    this.notifySelection();
     this.requestRepaint();
   }
 
@@ -297,14 +401,34 @@ export class InkEngine {
     if (this.selectedIds.size === 0) return;
     const entries: { index: number; element: BoardElement }[] = [];
     for (let i = this.elements.length - 1; i >= 0; i--) {
-      if (this.selectedIds.has(this.elements[i].id)) {
-        entries.push({ index: i, element: this.elements[i] });
+      const el = this.elements[i];
+      if (this.selectedIds.has(el.id) && !isLocked(el)) {
+        entries.push({ index: i, element: el });
         this.elements.splice(i, 1);
       }
     }
     this.selectedIds.clear();
+    this.notifySelection();
+    if (entries.length === 0) {
+      this.requestRepaint();
+      return;
+    }
     this.undoStack.push({ type: 'erase', entries });
     this.redoStack = [];
+    this.afterDocumentChange();
+  }
+
+  /** Lock/unlock every image in the selection. Undoable; keeps selection. */
+  setLockedSelection(locked: boolean): void {
+    const ids = this.elements
+      .filter((el) => this.selectedIds.has(el.id) && el.kind === 'image' && isLocked(el) !== locked)
+      .map((el) => el.id);
+    if (ids.length === 0) return;
+    const cmd: Command = { type: 'setLocked', ids, locked };
+    this.applyCommand(cmd, false);
+    this.undoStack.push(cmd);
+    this.redoStack = [];
+    this.notifySelection();
     this.afterDocumentChange();
   }
 
@@ -312,6 +436,15 @@ export class InkEngine {
 
   addTextElement(el: TextElement): void {
     if (el.text.trim() === '') return;
+    this.elements.push(el);
+    this.undoStack.push({ type: 'add', element: el });
+    this.redoStack = [];
+    this.afterDocumentChange();
+  }
+
+  // ---- images ----------------------------------------------------------------
+
+  addImageElement(el: ImageElement): void {
     this.elements.push(el);
     this.undoStack.push({ type: 'add', element: el });
     this.redoStack = [];
@@ -367,12 +500,20 @@ export class InkEngine {
     return box;
   }
 
-  /** Topmost element within touch reach of a world point (select/text tools). */
-  private hitAtPoint(p: Point, kindFilter?: BoardElement['kind']): BoardElement | null {
+  /** Topmost element within touch reach of a world point (select/text tools).
+   *  Locked elements are transparent to hits unless `includeLocked` — pointer
+   *  gestures pass through a locked backdrop, but a deliberate tap can still
+   *  select it for unlocking. */
+  private hitAtPoint(
+    p: Point,
+    kindFilter?: BoardElement['kind'],
+    includeLocked = false,
+  ): BoardElement | null {
     const zoom = this.viewport.get().zoom;
     for (let i = this.elements.length - 1; i >= 0; i--) {
       const el = this.elements[i];
       if (kindFilter && el.kind !== kindFilter) continue;
+      if (!includeLocked && isLocked(el)) continue;
       if (el.kind === 'text') {
         // Text hits anywhere in its box, not just the glyph outlines.
         const box = elementBBox(el);
@@ -389,6 +530,33 @@ export class InkEngine {
       }
       const reach = 8 / zoom + elementVisualPad(el);
       if (hitTestElement(el, p, p, reach)) return el;
+    }
+    return null;
+  }
+
+  /** The lone selected image, when it is resizable (single + unlocked). */
+  private singleSelectedImage(): ImageElement | null {
+    if (this.tool !== 'select' || this.selectedIds.size !== 1) return null;
+    const [id] = this.selectedIds;
+    const el = this.elements.find((e) => e.id === id);
+    return el && el.kind === 'image' && !isLocked(el) ? el : null;
+  }
+
+  /** Corner handle under a stage point, with the opposite (fixed) corner. */
+  private resizeHandleAt(stage: Point): { el: ImageElement; anchor: Point } | null {
+    const el = this.singleSelectedImage();
+    if (!el) return null;
+    const corners = [
+      { x: el.x, y: el.y },
+      { x: el.x + el.w, y: el.y },
+      { x: el.x + el.w, y: el.y + el.h },
+      { x: el.x, y: el.y + el.h },
+    ];
+    for (let i = 0; i < 4; i++) {
+      const c = this.viewport.worldToStage(corners[i]);
+      if (Math.hypot(c.x - stage.x, c.y - stage.y) <= HANDLE_REACH) {
+        return { el, anchor: corners[(i + 2) % 4] };
+      }
     }
     return null;
   }
@@ -540,17 +708,34 @@ export class InkEngine {
     }
 
     if (tool === 'select') {
+      // Corner handles first: they extend past the image, and a grab must
+      // win over hit-testing whatever sits underneath.
+      const resize = this.resizeHandleAt(stage);
+      if (resize) {
+        this.mode = 'select-resize';
+        this.resizeId = resize.el.id;
+        this.resizeBefore = { x: resize.el.x, y: resize.el.y, w: resize.el.w, h: resize.el.h };
+        this.resizeAnchor = resize.anchor;
+        this.requestRepaint();
+        return;
+      }
       const hit = this.hitAtPoint(p);
       if (hit) {
         // Tap on an unselected element selects just it; dragging moves the
         // whole selection.
-        if (!this.selectedIds.has(hit.id)) this.selectedIds = new Set([hit.id]);
+        if (!this.selectedIds.has(hit.id)) {
+          this.selectedIds = new Set([hit.id]);
+          this.notifySelection();
+        }
         this.mode = 'select-move';
         this.moveLast = p;
         this.moveDx = 0;
         this.moveDy = 0;
       } else {
-        this.selectedIds.clear();
+        if (this.selectedIds.size > 0) {
+          this.selectedIds.clear();
+          this.notifySelection();
+        }
         this.mode = 'lasso';
         this.lassoPoints = [{ x: p.x, y: p.y }];
       }
@@ -639,9 +824,36 @@ export class InkEngine {
       this.moveDy += dy;
       const set = this.selectedIds;
       this.elements = this.elements.map((el) =>
-        set.has(el.id) ? translateElement(el, dx, dy) : el,
+        set.has(el.id) && !isLocked(el) ? translateElement(el, dx, dy) : el,
       );
       // Coalesce cache rebuilds to one per frame while dragging.
+      this.cacheDirty = true;
+      this.requestRepaint();
+      return;
+    }
+
+    if (this.mode === 'select-resize') {
+      const anchor = this.resizeAnchor;
+      const before = this.resizeBefore;
+      if (!anchor || !before || !this.resizeId) return;
+      const p = this.toWorld(e.clientX, e.clientY);
+      // Aspect-true: grow to whichever of the drag's extents dominates.
+      const aspect = before.h > 0 ? before.w / before.h : 1;
+      let w = Math.abs(p.x - anchor.x);
+      let h = Math.abs(p.y - anchor.y);
+      if (w < h * aspect) w = h * aspect;
+      else h = w / aspect;
+      if (w < MIN_IMAGE_SIZE || h < MIN_IMAGE_SIZE) {
+        const grow = Math.max(MIN_IMAGE_SIZE / Math.max(w, 0.001), MIN_IMAGE_SIZE / Math.max(h, 0.001));
+        w *= grow;
+        h *= grow;
+      }
+      const x = p.x >= anchor.x ? anchor.x : anchor.x - w;
+      const y = p.y >= anchor.y ? anchor.y : anchor.y - h;
+      const id = this.resizeId;
+      this.elements = this.elements.map((el) =>
+        el.id === id && el.kind === 'image' ? { ...el, x, y, w, h } : el,
+      );
       this.cacheDirty = true;
       this.requestRepaint();
       return;
@@ -699,6 +911,17 @@ export class InkEngine {
       pts.length === 2 ? Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y) : 0;
   }
 
+  /** Did this lasso stay within a tap's worth of movement on screen? */
+  private lassoWasTap(poly: readonly LassoPoint[]): boolean {
+    const zoom = this.viewport.get().zoom;
+    const reach = LASSO_TAP_PX / zoom;
+    const first = poly[0];
+    for (const p of poly) {
+      if (Math.abs(p.x - first.x) > reach || Math.abs(p.y - first.y) > reach) return false;
+    }
+    return true;
+  }
+
   /** Max distance (world px) the active stroke has travelled from its start. */
   private strokeTravelWorld(): number {
     const pts = this.active?.points;
@@ -720,7 +943,38 @@ export class InkEngine {
     const wasShape = this.mode === 'shape';
     const wasLasso = this.mode === 'lasso';
     const wasMove = this.mode === 'select-move';
+    const wasResize = this.mode === 'select-resize';
     this.mode = 'idle';
+
+    if (wasResize) {
+      const id = this.resizeId;
+      const before = this.resizeBefore;
+      this.resizeId = null;
+      this.resizeBefore = null;
+      this.resizeAnchor = null;
+      const el = this.elements.find((e) => e.id === id);
+      if (id && before && el && el.kind === 'image') {
+        if (cancelled) {
+          this.elements = this.elements.map((e) =>
+            e.id === id && e.kind === 'image' ? { ...e, ...before } : e,
+          );
+          this.cacheDirty = true;
+        } else if (el.x !== before.x || el.y !== before.y || el.w !== before.w || el.h !== before.h) {
+          this.undoStack.push({
+            type: 'resize',
+            id,
+            before,
+            after: { x: el.x, y: el.y, w: el.w, h: el.h },
+          });
+          this.redoStack = [];
+          this.notifyHistory();
+          this.cb.onCommit();
+        }
+      }
+      this.notifySelection();
+      this.requestRepaint();
+      return;
+    }
 
     if (wasLaser) {
       // Nothing to commit — the trail keeps fading on its own.
@@ -758,10 +1012,23 @@ export class InkEngine {
     if (wasLasso) {
       const poly = this.lassoPoints;
       this.lassoPoints = [];
-      if (!cancelled && poly.length >= 3) {
-        this.selectedIds = new Set(
-          this.elements.filter((el) => elementInPolygon(el, poly)).map((el) => el.id),
-        );
+      if (!cancelled && poly.length > 0) {
+        if (this.lassoWasTap(poly)) {
+          // A tap reached the lasso, so nothing unlocked sits here — but a
+          // locked backdrop might, and a deliberate tap selects it so the
+          // host can offer Unlock.
+          const hit = this.hitAtPoint(poly[0], undefined, true);
+          this.selectedIds = hit && isLocked(hit) ? new Set([hit.id]) : new Set();
+        } else if (poly.length >= 3) {
+          // Locked elements are not lassoable: circling annotations on top
+          // of a backdrop must never scoop up the backdrop itself.
+          this.selectedIds = new Set(
+            this.elements
+              .filter((el) => !isLocked(el) && elementInPolygon(el, poly))
+              .map((el) => el.id),
+          );
+        }
+        this.notifySelection();
       }
       this.requestRepaint();
       return;
@@ -774,13 +1041,17 @@ export class InkEngine {
           // Put everything back where it was.
           const set = this.selectedIds;
           this.elements = this.elements.map((el) =>
-            set.has(el.id) ? translateElement(el, -this.moveDx, -this.moveDy) : el,
+            set.has(el.id) && !isLocked(el)
+              ? translateElement(el, -this.moveDx, -this.moveDy)
+              : el,
           );
           this.cacheDirty = true;
         } else {
           this.undoStack.push({
             type: 'move',
-            ids: [...this.selectedIds],
+            ids: this.elements
+              .filter((el) => this.selectedIds.has(el.id) && !isLocked(el))
+              .map((el) => el.id),
             dx: this.moveDx,
             dy: this.moveDy,
           });
@@ -788,6 +1059,7 @@ export class InkEngine {
           this.notifyHistory();
           this.cb.onCommit();
         }
+        this.notifySelection();
       }
       this.moveDx = 0;
       this.moveDy = 0;
@@ -840,6 +1112,8 @@ export class InkEngine {
     let removed = false;
     for (let i = this.elements.length - 1; i >= 0; i--) {
       const el = this.elements[i];
+      // Locked backdrops are erase-proof — swipes clean the ink on top.
+      if (isLocked(el)) continue;
       const reach = ERASER_RADIUS / zoom + elementVisualPad(el);
       if (hitTestElement(el, from, to, reach)) {
         this.elements.splice(i, 1);
@@ -925,6 +1199,29 @@ export class InkEngine {
         ctx.strokeRect(a.x - 2, a.y - 2, b.x - a.x + 4, b.y - a.y + 4);
       }
       ctx.restore();
+      // Corner handles: a single unlocked image resizes by its corners.
+      const img = this.singleSelectedImage();
+      if (img) {
+        ctx.save();
+        ctx.setLineDash([]);
+        ctx.fillStyle = '#ffffff';
+        ctx.strokeStyle = 'rgba(110, 168, 255, 0.95)';
+        ctx.lineWidth = 1.5;
+        const corners = [
+          { x: img.x, y: img.y },
+          { x: img.x + img.w, y: img.y },
+          { x: img.x + img.w, y: img.y + img.h },
+          { x: img.x, y: img.y + img.h },
+        ];
+        for (const corner of corners) {
+          const c = this.viewport.worldToStage(corner);
+          ctx.beginPath();
+          ctx.rect(c.x - 4, c.y - 4, 8, 8);
+          ctx.fill();
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
       this.viewport.applyTo(ctx);
     }
     if (this.laserTrail.length > 0) {
@@ -961,6 +1258,10 @@ export class InkEngine {
 
   private notifyHistory(): void {
     this.cb.onHistoryChange(this.undoStack.length > 0, this.redoStack.length > 0);
+  }
+
+  private notifySelection(): void {
+    this.cb.onSelectionChange();
   }
 
   private updateCursorStyle(): void {

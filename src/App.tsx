@@ -1,8 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { StageCanvas } from './ink/StageCanvas';
-import type { InkEngine, TextEditRequest } from './ink/InkEngine';
+import type { InkEngine, SelectionInfo, TextEditRequest } from './ink/InkEngine';
 import { TextEditorOverlay } from './ui/TextEditorOverlay';
+import { SelectionActions } from './ui/SelectionActions';
+import { PageStrip } from './ui/PageStrip';
 import type { Viewport } from './ink/Viewport';
+import { importImageFiles } from './import/images';
+import { importPdf, MAX_PDF_PAGES } from './import/pdf';
 import { CameraOverlay } from './media/CameraOverlay';
 import { useCamera } from './media/useCamera';
 import { useMicrophone } from './media/useMicrophone';
@@ -29,7 +33,7 @@ import {
   listTakes,
   deleteTake,
 } from './persistence/boards';
-import type { BoardMeta, StoredTake } from './persistence/boards';
+import type { BoardMeta, SavedBoard, StoredTake } from './persistence/boards';
 import { BoardsMenu } from './ui/BoardsMenu';
 import { TakesDrawer } from './ui/TakesDrawer';
 import { ExportMenu } from './ui/ExportMenu';
@@ -51,10 +55,18 @@ import {
   STAGE_HEIGHT,
   DEFAULT_CAMERA_LAYOUT,
   DEFAULT_VIEWPORT,
+  blankPage,
   cameraAspectFor,
   nextId,
 } from './types';
-import type { BackgroundKind, CameraLayout, CameraShape, ShapeKind, Tool } from './types';
+import type {
+  BackgroundKind,
+  BoardPage,
+  CameraLayout,
+  CameraShape,
+  ShapeKind,
+  Tool,
+} from './types';
 
 interface Toast {
   id: number;
@@ -84,6 +96,17 @@ export default function App() {
   // and the app runs on the single-lesson localStorage fallback.
   const [boards, setBoards] = useState<BoardMeta[]>([]);
   const [activeBoardId, setActiveBoardId] = useState<string | null>(null);
+  // Pages of the open board. The array lives in a ref (elements are heavy and
+  // change on every autosave sync); pageInfo is the light mirror React
+  // renders from — revision bumps whenever the structure changes.
+  const pagesRef = useRef<{ pages: BoardPage[]; activeIndex: number }>({
+    pages: [blankPage()],
+    activeIndex: 0,
+  });
+  const [pageInfo, setPageInfo] = useState({ count: 1, activeIndex: 0, revision: 0 });
+  // Image/PDF import state: the selection overlay and the PDF progress veil.
+  const [selection, setSelection] = useState<SelectionInfo | null>(null);
+  const [pdfProgress, setPdfProgress] = useState<{ done: number; total: number } | null>(null);
   const [takesOpen, setTakesOpen] = useState(false);
   const [takes, setTakes] = useState<StoredTake[]>([]);
   const [storageEstimate, setStorageEstimate] = useState<{ usage: number; quota: number } | null>(
@@ -167,6 +190,34 @@ export default function App() {
     [],
   );
 
+  /** Write what the engine/viewport hold back into the active page record. */
+  const syncActivePage = useCallback(() => {
+    const engine = engineRef.current;
+    const viewport = viewportRef.current;
+    const page = pagesRef.current.pages[pagesRef.current.activeIndex];
+    if (!engine || !viewport || !page) return;
+    page.elements = compactStrokes(engine.getStrokes());
+    page.viewport = viewport.get();
+  }, []);
+
+  const snapshotBoard = useCallback(
+    (boardId: string): SavedBoard => {
+      syncActivePage();
+      const { pages, activeIndex } = pagesRef.current;
+      return {
+        version: 5,
+        id: boardId,
+        ...lessonRef.current,
+        cameraLayout: cameraLayoutRef.current,
+        // Shallow copies: the queued save must not see later page edits.
+        pages: pages.map((p) => ({ ...p })),
+        activePageId: (pages[activeIndex] ?? pages[0]).id,
+        updatedAt: Date.now(),
+      };
+    },
+    [syncActivePage],
+  );
+
   const warnSaveFailed = useCallback(() => {
     if (quotaWarned.current) return;
     quotaWarned.current = true;
@@ -178,19 +229,20 @@ export default function App() {
   const persistNow = useCallback(
     (boardId: string | null): Promise<void> => {
       if (!storageReadyRef.current || !engineRef.current) return Promise.resolve();
-      const lesson = snapshotLesson();
       if (storageModeRef.current === 'idb') {
         if (!boardId) return Promise.resolve();
+        const board = snapshotBoard(boardId);
         saveChainRef.current = saveChainRef.current.then(async () => {
-          const ok = await saveBoard({ ...lesson, version: 4, id: boardId });
+          const ok = await saveBoard(board);
           if (!ok) warnSaveFailed();
         });
         setBoards((prev) => {
           const meta: BoardMeta = {
             id: boardId,
-            title: lesson.title,
-            updatedAt: lesson.updatedAt,
-            strokeCount: lesson.strokes.length,
+            title: board.title,
+            updatedAt: board.updatedAt,
+            strokeCount: board.pages.reduce((n, p) => n + p.elements.length, 0),
+            pageCount: board.pages.length,
           };
           return [meta, ...prev.filter((m) => m.id !== boardId)].sort(
             (a, b) => b.updatedAt - a.updatedAt,
@@ -198,10 +250,10 @@ export default function App() {
         });
         return saveChainRef.current;
       }
-      if (!saveLesson({ version: 2, ...lesson })) warnSaveFailed();
+      if (!saveLesson({ version: 2, ...snapshotLesson() })) warnSaveFailed();
       return Promise.resolve();
     },
-    [snapshotLesson, warnSaveFailed],
+    [snapshotBoard, snapshotLesson, warnSaveFailed],
   );
 
   const scheduleSave = useCallback(() => {
@@ -237,6 +289,29 @@ export default function App() {
     [],
   );
 
+  const applyBoard = useCallback(
+    (board: SavedBoard, engine: InkEngine, viewport: Viewport) => {
+      setTitle(board.title);
+      setBackground(board.background);
+      setTool(board.tool);
+      setColor(board.color);
+      setWidth(board.width);
+      setCameraLayout(board.cameraLayout);
+      cameraLayoutRef.current = board.cameraLayout;
+      const pages = board.pages.length > 0 ? board.pages : [blankPage()];
+      const found = pages.findIndex((p) => p.id === board.activePageId);
+      const activeIndex = found >= 0 ? found : 0;
+      pagesRef.current = { pages, activeIndex };
+      const page = pages[activeIndex];
+      viewport.set(page.viewport);
+      engine.loadStrokes(page.elements);
+      setHasInk(page.elements.length > 0);
+      setInkRevision((r) => r + 1);
+      setPageInfo((p) => ({ count: pages.length, activeIndex, revision: p.revision + 1 }));
+    },
+    [],
+  );
+
   const handleEngineReady = useCallback(
     (engine: InkEngine, viewport: Viewport) => {
       engineRef.current = engine;
@@ -248,7 +323,7 @@ export default function App() {
           boardIdRef.current = init.board.id;
           setActiveBoardId(init.board.id);
           setBoards(init.boards);
-          applyLesson(init.board, engine, viewport);
+          applyBoard(init.board, engine, viewport);
         } else {
           // IndexedDB unavailable — single-lesson localStorage, as before.
           const saved = loadLesson();
@@ -264,7 +339,7 @@ export default function App() {
         void recoverSessions().then(setRecoverable);
       })();
     },
-    [applyLesson, scheduleSave],
+    [applyBoard, applyLesson, scheduleSave],
   );
 
   const handleHistoryChange = useCallback((undo: boolean, redo: boolean) => {
@@ -343,11 +418,11 @@ export default function App() {
       }
       boardIdRef.current = board.id;
       setActiveBoardId(board.id);
-      applyLesson(board, engine, viewport);
+      applyBoard(board, engine, viewport);
       void setActiveBoard(board.id);
       setBoards(await listBoards());
     },
-    [applyLesson, persistNow, pushToast],
+    [applyBoard, persistNow, pushToast],
   );
 
   const handleSwitchBoard = useCallback(
@@ -393,6 +468,205 @@ export default function App() {
     },
     [handleCreateBoard, openBoard, pushToast],
   );
+
+  // ---- pages -----------------------------------------------------------------
+
+  /** Re-mirror pagesRef into React state; `load` swaps the engine/viewport
+   *  onto the (possibly new) active page. */
+  const refreshPages = useCallback(
+    (activeIndex: number, load: boolean) => {
+      const { pages } = pagesRef.current;
+      const idx = clamp(activeIndex, 0, pages.length - 1);
+      pagesRef.current.activeIndex = idx;
+      if (load) {
+        const page = pages[idx];
+        viewportRef.current?.set(page.viewport);
+        engineRef.current?.loadStrokes(page.elements);
+        setHasInk(page.elements.length > 0);
+        setInkRevision((r) => r + 1);
+      }
+      setPageInfo((p) => ({ count: pages.length, activeIndex: idx, revision: p.revision + 1 }));
+      scheduleSave();
+    },
+    [scheduleSave],
+  );
+
+  const openPage = useCallback(
+    (index: number) => {
+      const { pages, activeIndex } = pagesRef.current;
+      if (index === activeIndex || index < 0 || index >= pages.length) return;
+      syncActivePage();
+      refreshPages(index, true);
+    },
+    [refreshPages, syncActivePage],
+  );
+
+  const addPage = useCallback(() => {
+    syncActivePage();
+    const { pages, activeIndex } = pagesRef.current;
+    const page = blankPage();
+    // A fresh page opens where you were looking — less disorienting than
+    // snapping back to the origin.
+    page.viewport = viewportRef.current?.get() ?? page.viewport;
+    pages.splice(activeIndex + 1, 0, page);
+    refreshPages(activeIndex + 1, true);
+  }, [refreshPages, syncActivePage]);
+
+  const duplicatePage = useCallback(
+    (index: number) => {
+      syncActivePage();
+      const { pages } = pagesRef.current;
+      const src = pages[index];
+      if (!src) return;
+      const copy: BoardPage = {
+        id: nextId('pg'),
+        // Fresh element ids (selection/undo track identity); assetIds are
+        // shared on purpose — both copies point at the same stored pixels.
+        elements: src.elements.map((el) => ({ ...structuredClone(el), id: nextId('el') })),
+        viewport: { ...src.viewport },
+      };
+      pages.splice(index + 1, 0, copy);
+      refreshPages(index + 1, true);
+    },
+    [refreshPages, syncActivePage],
+  );
+
+  const deletePage = useCallback(
+    (index: number) => {
+      const { pages, activeIndex } = pagesRef.current;
+      if (index < 0 || index >= pages.length) return;
+      if (pages.length === 1) {
+        // A board always has a page: deleting the last one blanks it.
+        const page = blankPage();
+        page.viewport = viewportRef.current?.get() ?? page.viewport;
+        pages[0] = page;
+        refreshPages(0, true);
+        return;
+      }
+      pages.splice(index, 1);
+      if (index === activeIndex) {
+        refreshPages(Math.min(index, pages.length - 1), true);
+      } else {
+        refreshPages(index < activeIndex ? activeIndex - 1 : activeIndex, false);
+      }
+    },
+    [refreshPages],
+  );
+
+  const movePage = useCallback(
+    (index: number, dir: -1 | 1) => {
+      const { pages, activeIndex } = pagesRef.current;
+      const target = index + dir;
+      if (index < 0 || index >= pages.length || target < 0 || target >= pages.length) return;
+      syncActivePage();
+      [pages[index], pages[target]] = [pages[target], pages[index]];
+      const nextActive =
+        activeIndex === index ? target : activeIndex === target ? index : activeIndex;
+      refreshPages(nextActive, false);
+    },
+    [refreshPages, syncActivePage],
+  );
+
+  // DEV hook so e2e tests can drive pages without pixel-perfect strip taps.
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    (window as unknown as Record<string, unknown>).__scratchyPages = {
+      open: openPage,
+      add: addPage,
+      duplicate: duplicatePage,
+      remove: deletePage,
+      move: movePage,
+      info: () => ({
+        count: pagesRef.current.pages.length,
+        activeIndex: pagesRef.current.activeIndex,
+        ids: pagesRef.current.pages.map((p) => p.id),
+      }),
+    };
+  }, [openPage, addPage, duplicatePage, deletePage, movePage]);
+
+  // ---- selection (lock/unlock overlay) ----------------------------------------
+
+  const handleSelectionChange = useCallback(() => {
+    const info = engineRef.current?.getSelectionInfo();
+    setSelection(info && info.ids.length > 0 ? info : null);
+  }, []);
+
+  // ---- image / PDF import ------------------------------------------------------
+
+  const handleImportPdf = useCallback(
+    async (file: File) => {
+      setPdfProgress({ done: 0, total: 0 });
+      try {
+        const result = await importPdf(file, (done, total) => setPdfProgress({ done, total }));
+        if (result.totalPages > result.pages.length) {
+          pushToast(`Long PDF — imported the first ${MAX_PDF_PAGES} pages.`);
+        }
+        if (result.pages.length === 0) return;
+        syncActivePage();
+        const { pages } = pagesRef.current;
+        const firstNew = pages.length;
+        pages.push(...result.pages);
+        refreshPages(firstNew, true);
+        // Assets are already committed — put the board record next to them
+        // now rather than trusting the debounce.
+        await persistNow(boardIdRef.current);
+      } catch {
+        pushToast('Could not read that PDF.');
+      } finally {
+        setPdfProgress(null);
+      }
+    },
+    [persistNow, pushToast, refreshPages, syncActivePage],
+  );
+
+  const handleImportFiles = useCallback(
+    (files: File[]) => {
+      const engine = engineRef.current;
+      const viewport = viewportRef.current;
+      if (!engine || !viewport || files.length === 0) return;
+      if (storageModeRef.current !== 'idb') {
+        pushToast("Importing files needs browser storage that isn't available here.");
+        return;
+      }
+      const images = files.filter((f) => f.type.startsWith('image/'));
+      const pdfs = files.filter(
+        (f) => f.type === 'application/pdf' || /\.pdf$/i.test(f.name),
+      );
+      if (images.length === 0 && pdfs.length === 0) {
+        pushToast('Only images and PDFs can be imported.');
+        return;
+      }
+      if (pdfs.length > 1) pushToast('One PDF at a time — importing the first.');
+      if (images.length > 0) {
+        void importImageFiles(images, { engine, viewport, toast: pushToast });
+      }
+      if (pdfs.length > 0) void handleImportPdf(pdfs[0]);
+    },
+    [handleImportPdf, pushToast],
+  );
+
+  // Paste an image (screenshot) straight onto the board.
+  const importFilesRef = useRef(handleImportFiles);
+  importFilesRef.current = handleImportFiles;
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
+      ) {
+        return;
+      }
+      const files = [...(e.clipboardData?.files ?? [])].filter(
+        (f) => f.type.startsWith('image/') || f.type === 'application/pdf',
+      );
+      if (files.length === 0) return;
+      e.preventDefault();
+      importFilesRef.current(files);
+    };
+    window.addEventListener('paste', onPaste);
+    return () => window.removeEventListener('paste', onPaste);
+  }, []);
 
   // ---- PNG export ----------------------------------------------------------------
 
@@ -762,6 +1036,7 @@ export default function App() {
     mic: handleMicButton,
     recorderPhase: recorder.phase as RecorderPhase,
     pauseResume: () => {},
+    flipPage: (_dir: -1 | 1) => {},
   });
   keyActionsRef.current = {
     camera: handleCameraButton,
@@ -771,6 +1046,7 @@ export default function App() {
       if (recorder.phase === 'recording') recorder.pause();
       else if (recorder.phase === 'paused') recorder.resume();
     },
+    flipPage: (dir: -1 | 1) => openPage(pagesRef.current.activeIndex + dir),
   };
 
   useEffect(() => {
@@ -858,6 +1134,15 @@ export default function App() {
           if (engine && viewport) zoomToFit(engine, viewport);
           break;
         }
+        case 'pageup':
+          // Flip slides — deliberately allowed while recording.
+          e.preventDefault();
+          keyActionsRef.current.flipPage(-1);
+          break;
+        case 'pagedown':
+          e.preventDefault();
+          keyActionsRef.current.flipPage(1);
+          break;
       }
     };
     const onKeyUp = (e: KeyboardEvent) => {
@@ -921,6 +1206,7 @@ export default function App() {
           />
         }
         onLibrary={activeBoardId ? handleOpenTakes : undefined}
+        onImportFiles={activeBoardId ? handleImportFiles : undefined}
         micEnabled={mic.enabled}
         micMuted={mic.muted}
         onMic={handleMicButton}
@@ -937,7 +1223,18 @@ export default function App() {
         onStop={recorder.stop}
       />
 
-      <main className="viewport">
+      <main
+        className="viewport"
+        onDragOver={(e) => {
+          if (e.dataTransfer.types.includes('Files')) e.preventDefault();
+        }}
+        onDrop={(e) => {
+          const files = [...e.dataTransfer.files];
+          if (files.length === 0) return;
+          e.preventDefault();
+          handleImportFiles(files);
+        }}
+      >
         <div className="stage-fit" ref={fitRef}>
           <div className={stageClasses} style={{ transform: `scale(${scale})` }}>
             <StageCanvas
@@ -950,7 +1247,21 @@ export default function App() {
               onHistoryChange={handleHistoryChange}
               onCommit={handleCommit}
               onTextEdit={handleTextEdit}
+              onSelectionChange={handleSelectionChange}
             />
+            {selection && selection.images.length > 0 && selection.bbox && nav &&
+              tool === 'select' && (
+                <SelectionActions
+                  viewport={nav.viewport}
+                  bbox={selection.bbox}
+                  locked={selection.images.every((im) => im.locked === true)}
+                  onToggleLock={() =>
+                    engineRef.current?.setLockedSelection(
+                      !selection.images.every((im) => im.locked === true),
+                    )
+                  }
+                />
+              )}
             {textEdit && nav && (
               <TextEditorOverlay
                 key={textEdit.element?.id ?? `${textEdit.world.x},${textEdit.world.y}`}
@@ -1010,6 +1321,22 @@ export default function App() {
               onEmptyFit={() => pushToast('Nothing to fit — the board is empty.')}
             />
           </div>
+        )}
+
+        {nav && activeBoardId && (
+          <PageStrip
+            getPages={() => pagesRef.current.pages}
+            activeIndex={pageInfo.activeIndex}
+            revision={pageInfo.revision}
+            inkRevision={inkRevision}
+            engine={nav.engine}
+            background={background}
+            onOpen={openPage}
+            onAdd={addPage}
+            onDuplicate={duplicatePage}
+            onDelete={deletePage}
+            onMove={movePage}
+          />
         )}
 
         <Toolbar
@@ -1076,6 +1403,17 @@ export default function App() {
           onClose={() => setTakesOpen(false)}
           onDelete={(id) => void handleDeleteTake(id)}
         />
+      )}
+
+      {pdfProgress && (
+        <div className="pdf-progress" role="status" aria-live="polite">
+          <div className="pdf-progress-card">
+            <span className="spinner" aria-hidden="true" />
+            {pdfProgress.total > 0
+              ? `Importing PDF — page ${pdfProgress.done} / ${pdfProgress.total}`
+              : 'Reading PDF…'}
+          </div>
+        </div>
       )}
 
       <div className="toasts" role="status" aria-live="polite">

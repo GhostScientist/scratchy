@@ -1,7 +1,9 @@
-import { nextId, DEFAULT_CAMERA_LAYOUT, DEFAULT_VIEWPORT } from '../types';
+import { nextId, blankPage, DEFAULT_CAMERA_LAYOUT, DEFAULT_VIEWPORT } from '../types';
+import type { BackgroundKind, BoardPage, CameraLayout, Tool } from '../types';
 import { normalizeElement } from '../lib/elements';
 import { loadLesson } from './autosave';
 import type { SavedLesson } from './autosave';
+import { sweepOrphanAssets } from './assets';
 import {
   idbAvailable,
   idbGet,
@@ -14,20 +16,37 @@ import {
 } from './db';
 
 /** A lesson stored in IndexedDB: one of possibly many named boards.
+ *  v5 introduced pages (slide deck): the flat strokes+viewport became an
+ *  ordered pages[] where each page owns its elements and viewport.
  *  v4 introduced non-stroke elements (shapes/text) discriminated by `kind`;
  *  v3 boards migrate by tagging every entry as a stroke. */
-export interface SavedBoard extends Omit<SavedLesson, 'version'> {
-  version: 4;
+export interface SavedBoard {
+  version: 5;
   id: string;
+  title: string;
+  background: BackgroundKind;
+  tool: Tool;
+  color: string;
+  width: number;
+  cameraLayout: CameraLayout;
+  pages: BoardPage[];
+  activePageId: string;
+  updatedAt: number;
 }
 
-function migrateBoard(raw: SavedBoard | (Omit<SavedBoard, 'version'> & { version: 3 })): SavedBoard {
-  if (raw.version === 4) return raw;
-  return {
-    ...raw,
-    version: 4,
-    strokes: (raw.strokes ?? []).map(normalizeElement),
+/** Pre-page board records (and the localStorage import path). */
+type LegacyBoard = Omit<SavedLesson, 'version'> & { version: 3 | 4; id: string };
+
+export function migrateBoard(raw: SavedBoard | LegacyBoard): SavedBoard {
+  if (raw.version === 5) return raw;
+  const { strokes, viewport, version: _version, ...rest } = raw;
+  const page: BoardPage = {
+    id: nextId('pg'),
+    // v3 entries lack `kind`; v4 normalization is a no-op.
+    elements: (strokes ?? []).map(normalizeElement),
+    viewport: viewport ?? { ...DEFAULT_VIEWPORT },
   };
+  return { ...rest, version: 5, pages: [page], activePageId: page.id };
 }
 
 export interface BoardMeta {
@@ -35,6 +54,7 @@ export interface BoardMeta {
   title: string;
   updatedAt: number;
   strokeCount: number;
+  pageCount: number;
 }
 
 /** A recorded take kept in the library. Blobs store natively in IDB. */
@@ -52,8 +72,9 @@ export interface StoredTake {
 const ACTIVE_KEY = 'activeBoardId';
 
 function blankBoard(): SavedBoard {
+  const page = blankPage();
   return {
-    version: 4,
+    version: 5,
     id: nextId('b'),
     title: 'Untitled lesson',
     background: 'white',
@@ -61,8 +82,8 @@ function blankBoard(): SavedBoard {
     color: '#1d1f24',
     width: 4,
     cameraLayout: { ...DEFAULT_CAMERA_LAYOUT },
-    viewport: { ...DEFAULT_VIEWPORT },
-    strokes: [],
+    pages: [page],
+    activePageId: page.id,
     updatedAt: Date.now(),
   };
 }
@@ -72,8 +93,32 @@ function toMeta(board: SavedBoard): BoardMeta {
     id: board.id,
     title: board.title,
     updatedAt: board.updatedAt,
-    strokeCount: board.strokes.length,
+    strokeCount: board.pages.reduce((n, p) => n + p.elements.length, 0),
+    pageCount: board.pages.length,
   };
+}
+
+/** Every assetId any page of any board still points at. */
+export function collectAssetIds(boards: readonly SavedBoard[]): Set<string> {
+  const ids = new Set<string>();
+  for (const board of boards) {
+    for (const page of board.pages) {
+      for (const el of page.elements) {
+        if (el.kind === 'image') ids.add(el.assetId);
+      }
+    }
+  }
+  return ids;
+}
+
+/** Drop assets no board references any more. Fire-and-forget safe. */
+async function sweepAssets(): Promise<void> {
+  try {
+    const boards = (await idbGetAll<SavedBoard>(STORE_BOARDS)).map(migrateBoard);
+    await sweepOrphanAssets(collectAssetIds(boards));
+  } catch {
+    // Best effort — orphans only cost storage.
+  }
 }
 
 function sortMeta(metas: BoardMeta[]): BoardMeta[] {
@@ -127,6 +172,9 @@ async function doInitBoards(): Promise<{ board: SavedBoard; boards: BoardMeta[] 
     const metas = sortMeta(boards.map(toMeta));
     const board = boards.find((b) => b.id === activeId) ?? boards.find((b) => b.id === metas[0].id)!;
     if (board.id !== activeId) await idbPut(STORE_META, board.id, ACTIVE_KEY);
+    // Erased images leave their assets behind (undo safety within a session);
+    // startup is the safe moment to drop the ones nothing references anymore.
+    void sweepOrphanAssets(collectAssetIds(boards));
     return { board, boards: metas };
   } catch {
     return null;
@@ -166,7 +214,7 @@ export async function createBoard(): Promise<SavedBoard | null> {
   return board;
 }
 
-/** Delete a board and every take recorded on it. */
+/** Delete a board, every take recorded on it, and any assets it alone used. */
 export async function deleteBoard(id: string): Promise<void> {
   try {
     await idbDelete(STORE_BOARDS, id);
@@ -174,6 +222,7 @@ export async function deleteBoard(id: string): Promise<void> {
     for (const take of takes) {
       if (take.boardId === id) await idbDelete(STORE_TAKES, take.id);
     }
+    void sweepAssets();
   } catch {
     // Best effort — a failed delete leaves the board listed.
   }

@@ -91,42 +91,58 @@ installable/offline behavior against `vite preview`.
   paint.
 - **Persistence** — the vector lesson (elements, viewport, tool prefs, camera
   layout, title) autosaves (debounced 600ms) and survives reloads.
+- **Image import & markup** — import images (top-bar button, drag-drop, or
+  paste) as canvas elements: move/resize (aspect-true corner handles) with the
+  select tool, lock/unlock via a floating chip so a backdrop can't be dragged
+  or erased while you annotate over it. Pixels live in an IndexedDB `assets`
+  store; elements only carry a reference.
+- **Pages (slide deck)** — each board holds an ordered list of pages with
+  their own content and viewport: add/duplicate/reorder/delete from the bottom
+  thumbnail strip, flip with PageUp/PageDown (also mid-recording — the
+  recording keeps rolling across flips).
+- **PDF import** — importing a PDF renders one slide per page (pdf.js, lazy
+  loaded, bundled worker so it works offline) and appends them as pages with
+  locked backdrops, each opening zoomed to fit.
 
 ## Architecture (src/)
 
 | Area | Files | Notes |
 |---|---|---|
-| Ink core | `ink/InkEngine.ts` | Imperative pointer handling, gesture modes (draw/erase/pan/laser/shape/lasso/select-move), viewport-culled committed-ink cache, command-stack undo (add/erase/clear/move/setText); React never sees per-point events |
+| Ink core | `ink/InkEngine.ts` | Imperative pointer handling, gesture modes (draw/erase/pan/laser/shape/lasso/select-move/select-resize), viewport-culled committed-ink cache, command-stack undo (add/erase/move/setText/resize/setLocked); React never sees per-point events |
 | Viewport | `ink/Viewport.ts` | stage↔world transform, pan/zoom/fit, subscription-based change notification |
 | Stage | `ink/StageCanvas.tsx` | bg / ink / active canvas layers at a fixed 2× backing store |
 | Rendering | `lib/strokes.ts`, `lib/elements.ts`, `lib/lasso.ts`, `lib/backgrounds.ts`, `lib/laser.ts` | Path2D + bbox caches per element; stroke/shape/text dispatch shared by display, compositor, minimap, and PNG export; point-in-polygon lasso |
 | Media | `media/useCamera.ts`, `useMicrophone.ts`, `CameraOverlay.tsx` | tracks stopped the moment they're disabled |
 | Recording | `recording/Compositor.ts`, `useRecorder.ts`, `presets.ts`, `mime.ts`, `RecordingStore.ts`, `PreviewModal.tsx` | preset-sized compositor canvas driven by an "effective viewport" (stage crop + scale); pause/resume with active-time accounting; chunks persist incrementally with a manifest for crash recovery |
 | Capability | `capability/probe.ts`, `profile.ts` | SPEC §9 checks + smoke recording + 1080p performance probe, cached as a localStorage device profile |
-| Persistence | `persistence/db.ts`, `boards.ts`, `autosave.ts` | minimal IDB wrapper (v2: boards, takes, meta, recSessions, recChunks); multi-board + takes; localStorage fallback + v1→v4 migrations |
+| Persistence | `persistence/db.ts`, `boards.ts`, `assets.ts`, `autosave.ts` | minimal IDB wrapper (v3: boards, takes, meta, recSessions, recChunks, assets); multi-board + pages + takes + image assets (orphans swept at init/board-delete); localStorage fallback + v1→v5 migrations |
+| Import | `import/images.ts`, `import/pdf.ts`, `lib/imageCache.ts` | image files → assets + elements; PDF → one locked backdrop page per PDF page via lazy-loaded pdf.js (legacy build, bundled worker); LRU ImageBitmap cache keyed by assetId |
 | Settings | `settings/settings.ts` | device-global prefs (handedness, preset) in localStorage, applied at first paint |
 | Export | `export/png.ts` | view/board PNG via the same culled world renderer |
-| UI | `ui/Toolbar.tsx`, `TopBar.tsx`, `SettingsMenu.tsx`, `Minimap.tsx`, `ZoomControls.tsx`, `BoardsMenu.tsx`, `TakesDrawer.tsx`, `ExportMenu.tsx`, `RecoveryCard.tsx`, `TextEditorOverlay.tsx` | ≥44px touch targets, no hover-required actions |
+| UI | `ui/Toolbar.tsx`, `TopBar.tsx`, `SettingsMenu.tsx`, `Minimap.tsx`, `ZoomControls.tsx`, `BoardsMenu.tsx`, `PageStrip.tsx`, `SelectionActions.tsx`, `TakesDrawer.tsx`, `ExportMenu.tsx`, `RecoveryCard.tsx`, `TextEditorOverlay.tsx` | ≥44px touch targets, no hover-required actions |
 | PWA | `vite.config.ts` (vite-plugin-pwa), `public/icons/` | autoUpdate service worker, precached shell, installable manifest |
 
 ## Not yet built (per spec, post-MVP here)
 
-Multiple pages per lesson, image insertion, OPFS recording storage, stroke
-transformation beyond move (resize/rotate), equation recognition, background
-blur, WebCodecs export, and the other SPEC §21 future opportunities.
+OPFS recording storage, stroke transformation beyond move (resize/rotate is
+images-only), equation recognition, background blur, WebCodecs export, and
+the other SPEC §21 future opportunities.
 
 ## Verification
 
-`npm run test:e2e` — 39 Playwright tests cover zoom anchoring, world-coordinate
+`npm run test:e2e` — 48 Playwright tests cover zoom anchoring, world-coordinate
 invariance under pans, hand/space/pinch gestures, viewport persistence,
 v1→IndexedDB migration, board isolation across reloads, the takes library, the
 laser pointer, navigation aids, PNG export dimensions, left-handed layout,
 pause/resume timing, the capability probe (including the no-MediaRecorder
 path), per-preset output resolutions (720p/1080p/vertical verified via the
 preview video's `videoWidth×videoHeight`), incremental chunk persistence and
-crash recovery across reloads, and the shape/text/lasso tools with the v3→v4
-board migration. `npm run test:pwa` — 2 more tests build the app and verify
-the manifest and offline shell against `vite preview`.
+crash recovery across reloads, the shape/text/lasso tools with the v3→v4
+board migration, pages (isolation, navigation, duplicate/reorder/delete,
+reload persistence, v4→v5 migration), image import (move/resize/undo,
+lock/unlock semantics, asset round-trip), and PDF import (slides with locked
+backdrops surviving reload). `npm run test:pwa` — 2 more tests build the app
+and verify the manifest and offline shell against `vite preview`.
 
 An earlier end-to-end recording script (draw → camera + mic → record → stop →
 probe the exported file → reload) passed 14/14 checks against headless

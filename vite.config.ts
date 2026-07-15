@@ -36,10 +36,19 @@ export default defineConfig({
       workbox: {
         navigateFallback: '/index.html',
         // The compiled app is small; precache everything the build emits.
-        globPatterns: ['**/*.{js,css,html,png,svg,webmanifest}'],
+        // mjs covers the pdf.js worker chunk so PDF import works offline.
+        globPatterns: ['**/*.{js,mjs,css,html,png,svg,webmanifest}'],
+        // The pdf.js library + worker are ~1-2 MB each — above workbox's
+        // 2 MiB default cap, and they must precache for offline import.
+        maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
       },
     }),
   ],
+  // pdfjs-dist only loads via dynamic import on first PDF use; pre-bundle it
+  // so dev doesn't discover it mid-import and force-reload the page.
+  optimizeDeps: {
+    include: ['pdfjs-dist/legacy/build/pdf.mjs'],
+  },
   server: {
     host: true,
     port: 5173,

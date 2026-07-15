@@ -16,6 +16,7 @@ interface StageCanvasProps {
   onHistoryChange(canUndo: boolean, canRedo: boolean): void;
   onCommit(): void;
   onTextEdit(request: TextEditRequest): void;
+  onSelectionChange(): void;
 }
 
 export function StageCanvas(props: StageCanvasProps) {
@@ -32,12 +33,14 @@ export function StageCanvas(props: StageCanvasProps) {
     onHistoryChange: props.onHistoryChange,
     onCommit: props.onCommit,
     onTextEdit: props.onTextEdit,
+    onSelectionChange: props.onSelectionChange,
   });
   cbRef.current = {
     onReady: props.onReady,
     onHistoryChange: props.onHistoryChange,
     onCommit: props.onCommit,
     onTextEdit: props.onTextEdit,
+    onSelectionChange: props.onSelectionChange,
   };
 
   const redrawBackground = () => {
@@ -65,6 +68,7 @@ export function StageCanvas(props: StageCanvasProps) {
       onHistoryChange: (u, r) => cbRef.current.onHistoryChange(u, r),
       onCommit: () => cbRef.current.onCommit(),
       onTextEdit: (req) => cbRef.current.onTextEdit(req),
+      onSelectionChange: () => cbRef.current.onSelectionChange(),
     });
     engineRef.current = engine;
     viewportRef.current = viewport;

@@ -1417,3 +1417,187 @@ button:disabled {
     margin: 10px 14px 14px 84px;
   }
 }
+
+/* ---- page strip (slide deck) ------------------------------------------------- */
+/* Lives outside .stage like the nav aids, so it is never recorded. */
+
+.page-strip {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%);
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: min(70vw, 720px);
+  padding: 6px 8px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+}
+
+.page-strip-scroll {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.page-thumb {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.page-thumb-btn {
+  position: relative;
+  display: block;
+  padding: 0;
+  border-radius: 8px;
+  border: 2px solid transparent;
+  overflow: hidden;
+  line-height: 0;
+}
+
+.page-thumb-btn canvas {
+  width: 96px;
+  height: 54px;
+  display: block;
+  background: #fff;
+}
+
+.page-thumb.active .page-thumb-btn {
+  border-color: var(--focus, #6ea8ff);
+}
+
+.page-num {
+  position: absolute;
+  left: 4px;
+  bottom: 3px;
+  padding: 0 5px;
+  border-radius: 6px;
+  background: rgba(16, 17, 20, 0.72);
+  color: #fff;
+  font-size: 10px;
+  line-height: 15px;
+}
+
+.page-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+  padding-left: 6px;
+  border-left: 1px solid var(--line);
+}
+
+.page-action {
+  display: grid;
+  place-items: center;
+  min-width: 26px;
+  height: 26px;
+  padding: 0 5px;
+  border-radius: 7px;
+  color: var(--text-dim);
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+.page-action:hover:not(:disabled) {
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.page-action:disabled {
+  opacity: 0.35;
+}
+
+.page-action.danger {
+  color: #fff;
+  background: var(--accent);
+  font-size: 11px;
+}
+
+.page-add {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  border-radius: 8px;
+  border: 1px dashed var(--line);
+  color: var(--text-dim);
+}
+
+.page-add:hover {
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+/* ---- selection actions (lock/unlock chip over the canvas) --------------------- */
+
+.selection-actions {
+  position: absolute;
+  z-index: 16;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.selection-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  pointer-events: auto;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  box-shadow: var(--shadow);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.selection-action-btn:hover {
+  background: var(--panel-2);
+}
+
+/* ---- PDF import progress ------------------------------------------------------ */
+
+.pdf-progress {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  display: grid;
+  place-items: center;
+  background: rgba(10, 11, 13, 0.45);
+}
+
+.pdf-progress-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 22px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+  font-size: 14px;
+  color: var(--text);
+}
+
+.pdf-progress .spinner {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2.5px solid var(--panel-3);
+  border-top-color: var(--focus, #6ea8ff);
+  animation: spin 800ms linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

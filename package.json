@@ -12,6 +12,7 @@
     "test:pwa": "playwright test --config playwright.pwa.config.ts"
   },
   "dependencies": {
+    "pdfjs-dist": "^6.1.200",
     "perfect-freehand": "^1.2.2",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
