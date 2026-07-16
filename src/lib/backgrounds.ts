@@ -79,24 +79,93 @@ export function drawBackground(
   } else {
     const step = adaptiveStep(DOT_STEP, view.zoom);
     const half = step / 2;
-    ctx.fillStyle = spec.line;
-    ctx.beginPath();
-    for (
-      let wx = (Math.ceil((worldLeft - half) / step)) * step + half;
-      wx <= worldRight;
-      wx += step
-    ) {
-      for (
-        let wy = (Math.ceil((worldTop - half) / step)) * step + half;
-        wy <= worldBottom;
-        wy += step
-      ) {
-        const sx = toStageX(wx);
-        const sy = toStageY(wy);
-        ctx.moveTo(sx + 1.6, sy);
-        ctx.arc(sx, sy, 1.6, 0, Math.PI * 2);
-      }
+    if (!drawDotsPattern(ctx, spec.line, view, step, half)) {
+      drawDotsLoop(ctx, spec.line, view, step, half, toStageX, toStageY);
     }
-    ctx.fill();
   }
+}
+
+const DOT_RADIUS = 1.6; // stage px, constant at any zoom
+
+/**
+ * Dots via a repeating pattern tile: one small cell render + one fillRect
+ * replaces up to ~4,600 arc() calls per pan/pinch frame — the difference
+ * between a smooth pinch and a slideshow on a weak GPU. The cell renders at
+ * the context's device scale so dots stay crisp, and the pattern transform
+ * derives its scale from the rounded cell size so the period is exact (no
+ * cumulative drift across the stage). Returns false where the Pattern/
+ * DOMMatrix APIs are unavailable so the arc loop can take over.
+ */
+function drawDotsPattern(
+  ctx: CanvasRenderingContext2D,
+  color: string,
+  view: BackgroundView,
+  step: number,
+  half: number,
+): boolean {
+  if (typeof DOMMatrix === 'undefined') return false;
+  const deviceScale = ctx.getTransform().a || 1;
+  const period = step * view.zoom; // stage px between dots
+  const cellPx = Math.max(1, Math.round(period * deviceScale));
+  const cell = dotCell(color, cellPx, DOT_RADIUS * deviceScale);
+  if (!cell) return false;
+  const pattern = ctx.createPattern(cell, 'repeat');
+  if (!pattern) return false;
+  // Anchor the lattice: the first world dot column/row maps to stage px, and
+  // the cell's dot sits at its center.
+  const firstWx = Math.ceil((view.x - half) / step) * step + half;
+  const firstWy = Math.ceil((view.y - half) / step) * step + half;
+  const s = period / cellPx; // stage px per pattern px — period stays exact
+  const tx = (firstWx - view.x) * view.zoom - period / 2;
+  const ty = (firstWy - view.y) * view.zoom - period / 2;
+  pattern.setTransform(new DOMMatrix().translateSelf(tx, ty).scaleSelf(s));
+  ctx.save();
+  ctx.fillStyle = pattern;
+  ctx.fillRect(0, 0, view.outW, view.outH);
+  ctx.restore();
+  return true;
+}
+
+/** One dot centered in a period-sized tile, cached by size/color. Zoom only
+ *  changes the cell size on pinch frames; pans reuse the same cell. */
+let cachedCell: { key: string; canvas: HTMLCanvasElement } | null = null;
+
+function dotCell(color: string, cellPx: number, radiusPx: number): HTMLCanvasElement | null {
+  const key = `${color}|${cellPx}|${radiusPx.toFixed(2)}`;
+  if (cachedCell?.key === key) return cachedCell.canvas;
+  const canvas = document.createElement('canvas');
+  canvas.width = cellPx;
+  canvas.height = cellPx;
+  const cctx = canvas.getContext('2d');
+  if (!cctx) return null;
+  cctx.fillStyle = color;
+  cctx.beginPath();
+  cctx.arc(cellPx / 2, cellPx / 2, radiusPx, 0, Math.PI * 2);
+  cctx.fill();
+  cachedCell = { key, canvas };
+  return canvas;
+}
+
+function drawDotsLoop(
+  ctx: CanvasRenderingContext2D,
+  color: string,
+  view: BackgroundView,
+  step: number,
+  half: number,
+  toStageX: (wx: number) => number,
+  toStageY: (wy: number) => number,
+): void {
+  const worldRight = view.x + view.outW / view.zoom;
+  const worldBottom = view.y + view.outH / view.zoom;
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  for (let wx = Math.ceil((view.x - half) / step) * step + half; wx <= worldRight; wx += step) {
+    for (let wy = Math.ceil((view.y - half) / step) * step + half; wy <= worldBottom; wy += step) {
+      const sx = toStageX(wx);
+      const sy = toStageY(wy);
+      ctx.moveTo(sx + DOT_RADIUS, sy);
+      ctx.arc(sx, sy, DOT_RADIUS, 0, Math.PI * 2);
+    }
+  }
+  ctx.fill();
 }
