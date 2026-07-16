@@ -164,6 +164,9 @@ export class InkEngine {
   private raf = 0;
   private repaintQueued = false;
   private cacheDirty = false;
+  /** Bumped on every painted frame — lets the recording compositor skip
+   *  re-compositing when nothing visible has changed. */
+  private frameRevision = 0;
   private destroyed = false;
   private unsubscribeViewport: () => void;
   private unsubscribeImageCache: () => void;
@@ -489,6 +492,13 @@ export class InkEngine {
 
   getInkCanvas(): HTMLCanvasElement {
     return this.inkCanvas;
+  }
+
+  /** Monotonic count of painted frames. Every visible change (viewport,
+   *  commits, erases, laser fade, image loads) funnels through the repaint
+   *  rAF, so an unchanged value means the stage content is static. */
+  getFrameRevision(): number {
+    return this.frameRevision;
   }
 
   getLaserTrail(): readonly LaserPoint[] {
@@ -1185,6 +1195,7 @@ export class InkEngine {
     this.repaintQueued = true;
     this.raf = requestAnimationFrame(() => {
       this.repaintQueued = false;
+      this.frameRevision++;
       if (this.cacheDirty) {
         this.cacheDirty = false;
         this.rebuildInkCache();

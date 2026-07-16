@@ -11,6 +11,8 @@ import type { OutputCrop, RecordingPreset } from './presets';
 export interface CompositorSources {
   getBackground(): BackgroundKind;
   getInkCanvas(): HTMLCanvasElement | null;
+  /** Engine frame counter; unchanged = committed ink and viewport are static. */
+  getInkRevision(): number;
   /** Stroke or shape currently being drawn; null between gestures. */
   getActiveElement(): BoardElement | null;
   /** Current view onto the infinite world — the recording follows it. */
@@ -38,6 +40,9 @@ export class Compositor {
   private running = false;
   private track: MediaStreamTrack | null = null;
   private crop: OutputCrop;
+  private lastRevision = -1;
+  private lastBackground: BackgroundKind | null = null;
+  private lastPush = 0;
 
   constructor(
     private sources: CompositorSources,
@@ -73,11 +78,32 @@ export class Compositor {
 
   private frame = (): void => {
     if (!this.running) return;
-    this.draw();
+    // A mostly-static board is the common case while the presenter talks —
+    // skip the full re-composite unless something visible changed. Live
+    // camera/cutout frames and the fading laser advance on their own clock,
+    // so any of them forces a draw; committed ink + viewport changes are
+    // covered by the engine's frame revision, the background by identity.
+    const revision = this.sources.getInkRevision();
+    const background = this.sources.getBackground();
+    const dirty =
+      this.sources.getVideo() !== null ||
+      this.sources.getActiveElement() !== null ||
+      this.sources.getLaserTrail().length > 0 ||
+      revision !== this.lastRevision ||
+      background !== this.lastBackground;
+    if (dirty) {
+      this.draw();
+      this.lastRevision = revision;
+      this.lastBackground = background;
+    }
     // Belt and braces: some engines only emit captureStream frames when the
     // canvas is painted; requestFrame forces delivery even for a static board.
-    if (this.track && 'requestFrame' in this.track) {
+    // While static, a 1 Hz keepalive re-pushes the unchanged canvas so the
+    // encoder never starves.
+    const now = performance.now();
+    if (this.track && 'requestFrame' in this.track && (dirty || now - this.lastPush >= 1000)) {
       (this.track as CanvasCaptureMediaStreamTrack).requestFrame();
+      this.lastPush = now;
     }
     this.raf = requestAnimationFrame(this.frame);
   };

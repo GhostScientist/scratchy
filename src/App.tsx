@@ -796,6 +796,7 @@ export default function App() {
     () => ({
       getBackground: () => stateRef.current.background,
       getInkCanvas: () => engineRef.current?.getInkCanvas() ?? null,
+      getInkRevision: () => engineRef.current?.getFrameRevision() ?? 0,
       getActiveElement: () => engineRef.current?.getActiveElement() ?? null,
       getViewport: () => viewportRef.current?.get() ?? { ...DEFAULT_VIEWPORT },
       getLaserTrail: () => engineRef.current?.getLaserTrail() ?? [],
