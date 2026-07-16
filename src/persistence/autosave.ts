@@ -26,21 +26,30 @@ interface SavedLessonV1 extends Omit<SavedLesson, 'version' | 'viewport'> {
 
 const round1 = (n: number) => Math.round(n * 10) / 10;
 
+/** Committed strokes are immutable (edits replace the object — the same
+ *  invariant the render Path2D cache relies on), so each stroke only ever
+ *  needs its points rounded once, not on every debounced save. */
+const compactCache = new WeakMap<BoardElement, BoardElement>();
+
 /** Shrink stroke payloads before persisting — coordinates to 0.1 world px.
  *  Shapes and text are already tiny and pass through unchanged. */
 export function compactStrokes(elements: readonly BoardElement[]): BoardElement[] {
-  return elements.map((el) =>
-    el.kind === 'stroke'
-      ? {
-          ...el,
-          points: el.points.map((p) => ({
-            x: round1(p.x),
-            y: round1(p.y),
-            pressure: Math.round(p.pressure * 1000) / 1000,
-          })),
-        }
-      : el,
-  );
+  return elements.map((el) => {
+    if (el.kind !== 'stroke') return el;
+    let compact = compactCache.get(el);
+    if (!compact) {
+      compact = {
+        ...el,
+        points: el.points.map((p) => ({
+          x: round1(p.x),
+          y: round1(p.y),
+          pressure: Math.round(p.pressure * 1000) / 1000,
+        })),
+      };
+      compactCache.set(el, compact);
+    }
+    return compact;
+  });
 }
 
 export function saveLesson(lesson: SavedLesson): boolean {

@@ -302,13 +302,16 @@ export default function App() {
     [snapshotBoard, snapshotLesson, warnSaveFailed],
   );
 
-  const scheduleSave = useCallback(() => {
-    const boardId = boardIdRef.current;
-    window.clearTimeout(saveTimer.current);
-    saveTimer.current = window.setTimeout(() => {
-      void persistNow(boardId);
-    }, 600);
-  }, [persistNow]);
+  const scheduleSave = useCallback(
+    (delayMs = 600) => {
+      const boardId = boardIdRef.current;
+      window.clearTimeout(saveTimer.current);
+      saveTimer.current = window.setTimeout(() => {
+        void persistNow(boardId);
+      }, delayMs);
+    },
+    [persistNow],
+  );
 
   useEffect(() => {
     scheduleSave();
@@ -377,8 +380,9 @@ export default function App() {
         }
         storageReadyRef.current = true;
         // Where you are on the board is part of the lesson — persist
-        // pans/zooms through the same debounced autosave.
-        viewport.onChange(() => scheduleSave());
+        // pans/zooms through the same debounced autosave, on a slower timer:
+        // losing the last pan position to a crash is fine, losing ink is not.
+        viewport.onChange(() => scheduleSave(1500));
         scheduleSave();
         setNav({ engine, viewport });
         // Surface recordings interrupted by a crash or reload (SPEC §6.5).

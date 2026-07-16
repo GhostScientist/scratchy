@@ -23,11 +23,11 @@ export function useMicrophone(): MicrophoneApi {
   const [muted, setMuted] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const meterRef = useRef<{ ctx: AudioContext; raf: number } | null>(null);
+  const meterRef = useRef<{ ctx: AudioContext; stop(): void } | null>(null);
 
   const stopMeter = useCallback(() => {
     if (meterRef.current) {
-      cancelAnimationFrame(meterRef.current.raf);
+      meterRef.current.stop();
       meterRef.current.ctx.close().catch(() => {});
       meterRef.current = null;
     }
@@ -43,7 +43,9 @@ export function useMicrophone(): MicrophoneApi {
     ctx.createMediaStreamSource(s).connect(analyser);
     const data = new Uint8Array(analyser.fftSize);
     let smoothed = 0;
-    const meter = { ctx, raf: 0 };
+    // 15Hz is indistinguishable for a level meter and far cheaper than a rAF
+    // loop; the meter also pauses entirely while the tab is hidden.
+    const TICK_MS = 66;
     const tick = () => {
       analyser.getByteTimeDomainData(data);
       let sumSq = 0;
@@ -52,12 +54,24 @@ export function useMicrophone(): MicrophoneApi {
         sumSq += v * v;
       }
       const level = Math.min(1, Math.sqrt(sumSq / data.length) * 3.5);
-      smoothed = level > smoothed ? level : smoothed * 0.88;
+      // 0.6 per 66ms tick ≈ the old 0.88-per-frame decay at 60fps.
+      smoothed = level > smoothed ? level : smoothed * 0.6;
       document.documentElement.style.setProperty('--mic-level', smoothed.toFixed(3));
-      meter.raf = requestAnimationFrame(tick);
     };
-    meter.raf = requestAnimationFrame(tick);
-    meterRef.current = meter;
+    let interval = window.setInterval(tick, TICK_MS);
+    const onVisibility = () => {
+      window.clearInterval(interval);
+      interval = 0;
+      if (!document.hidden) interval = window.setInterval(tick, TICK_MS);
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    meterRef.current = {
+      ctx,
+      stop() {
+        window.clearInterval(interval);
+        document.removeEventListener('visibilitychange', onVisibility);
+      },
+    };
   }, []);
 
   const disable = useCallback(() => {

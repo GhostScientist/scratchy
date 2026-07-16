@@ -1147,7 +1147,13 @@ export class InkEngine {
         removed = true;
       }
     }
-    if (removed) this.rebuildInkCache();
+    if (removed) {
+      // Coalesce to one rebuild per frame — a fast swipe over dense ink can
+      // land several erase moves between paints, and each rebuild redraws
+      // every visible element.
+      this.cacheDirty = true;
+      this.requestRepaint();
+    }
   }
 
   // ---- rendering ----------------------------------------------------------

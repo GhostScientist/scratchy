@@ -47,7 +47,9 @@ export function StageCanvas(props: StageCanvasProps) {
     const canvas = bgRef.current;
     const viewport = viewportRef.current;
     if (!canvas || !viewport) return;
-    const ctx = canvas.getContext('2d')!;
+    // Opaque layer (drawBackground always lays a base fill) — lets the
+    // browser skip alpha blending when compositing the stage stack.
+    const ctx = canvas.getContext('2d', { alpha: false })!;
     ctx.setTransform(BACKING_SCALE, 0, 0, BACKING_SCALE, 0, 0);
     drawBackground(ctx, bgKindRef.current, {
       ...viewport.get(),
