@@ -36,18 +36,22 @@ export default defineConfig({
       workbox: {
         navigateFallback: '/index.html',
         // The compiled app is small; precache everything the build emits.
-        // mjs covers the pdf.js worker chunk so PDF import works offline.
-        globPatterns: ['**/*.{js,mjs,css,html,png,svg,webmanifest}'],
-        // The pdf.js library + worker are ~1-2 MB each — above workbox's
-        // 2 MiB default cap, and they must precache for offline import.
-        maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
+        // mjs covers the pdf.js worker chunk so PDF import works offline;
+        // wasm + tflite cover the camera-cutout segmentation assets.
+        globPatterns: ['**/*.{js,mjs,css,html,png,svg,wasm,tflite,webmanifest}'],
+        // The pdf.js library + worker are ~1-2 MB each and the MediaPipe
+        // vision wasm is ~11 MB — all above workbox's 2 MiB default cap,
+        // and all must precache so PDF import and the camera cutout work
+        // offline.
+        maximumFileSizeToCacheInBytes: 16 * 1024 * 1024,
       },
     }),
   ],
-  // pdfjs-dist only loads via dynamic import on first PDF use; pre-bundle it
-  // so dev doesn't discover it mid-import and force-reload the page.
+  // pdfjs-dist and tasks-vision only load via dynamic import on first use;
+  // pre-bundle them so dev doesn't discover them mid-import and force-reload
+  // the page.
   optimizeDeps: {
-    include: ['pdfjs-dist/legacy/build/pdf.mjs'],
+    include: ['pdfjs-dist/legacy/build/pdf.mjs', '@mediapipe/tasks-vision'],
   },
   server: {
     host: true,

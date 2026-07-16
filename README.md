@@ -42,7 +42,16 @@ installable/offline behavior against `vite preview`.
   recording; never enters the document, undo history, or autosave.
 - **Camera** — enabled only on tap, draggable/resizable overlay clamped to the
   stage (screen-anchored: it stays put while you pan the board), circle /
-  rounded / rectangle shapes, mirror toggle, hide/show while recording.
+  rounded / rectangle / cutout shapes, mirror toggle, hide/show while
+  recording.
+- **Background removal (cutout)** — the fourth camera shape segments you out
+  of your background (MediaPipe selfie segmentation, lazy-loaded, wasm + model
+  bundled so it works offline — no CDN, nothing uploaded) and layers you
+  directly over the board. The feed is composited at full display rate; the
+  mask refreshes at ~30 fps on a downscaled frame, with a runtime
+  performance watchdog that reverts to the rounded frame on hardware that
+  can't keep up. The model is committed at `src/assets/selfie_segmenter.tflite`
+  (Apache-2.0; re-fetch with `npm run fetch:model -- --force`).
 - **Microphone** — enabled only on tap, live level meter, mute/unmute during
   recording, voice-only recording works.
 - **Recording follows your view** — the compositor renders the current

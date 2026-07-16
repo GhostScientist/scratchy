@@ -9,6 +9,8 @@ import { importImageFiles } from './import/images';
 import { importPdf, MAX_PDF_PAGES } from './import/pdf';
 import { CameraOverlay } from './media/CameraOverlay';
 import { useCamera } from './media/useCamera';
+import { useCutout } from './media/useCutout';
+import type { CutoutFallbackReason } from './media/useCutout';
 import { useMicrophone } from './media/useMicrophone';
 import { useRecorder } from './recording/useRecorder';
 import type { RecorderPhase } from './recording/useRecorder';
@@ -167,6 +169,39 @@ export default function App() {
       setToasts((ts) => ts.filter((t) => t.id !== id));
     }, 4500);
   }, []);
+
+  // ---- camera background removal --------------------------------------------
+
+  // The engine (or this device) gave up on segmentation — land back on the
+  // rounded frame so the camera keeps working without interruption.
+  const handleCutoutFallback = useCallback(
+    (reason: CutoutFallbackReason) => {
+      setCameraLayout((l) => {
+        if (l.shape !== 'cutout') return l;
+        const height = Math.round(l.width * cameraAspectFor('rounded'));
+        return {
+          ...l,
+          shape: 'rounded',
+          height,
+          x: clamp(l.x, 0, STAGE_WIDTH - l.width),
+          y: clamp(l.y, 0, STAGE_HEIGHT - height),
+        };
+      });
+      pushToast(
+        reason === 'performance'
+          ? 'Background removal is too slow on this device — switched back to the rounded camera.'
+          : 'Background removal is unavailable in this browser — switched back to the rounded camera.',
+      );
+    },
+    [pushToast],
+  );
+
+  const cutout = useCutout({
+    active: camera.enabled && cameraVisible && cameraLayout.shape === 'cutout',
+    videoElRef,
+    onFallback: handleCutoutFallback,
+  });
+  const getCutoutCanvas = cutout.getCanvas;
 
   // ---- autosave --------------------------------------------------------------
 
@@ -753,9 +788,13 @@ export default function App() {
         stateRef.current.cameraEnabled && stateRef.current.cameraVisible
           ? videoElRef.current
           : null,
+      getCutoutCanvas: () =>
+        stateRef.current.cameraEnabled && stateRef.current.cameraVisible
+          ? getCutoutCanvas()
+          : null,
       getCameraLayout: () => cameraLayoutRef.current,
     }),
-    [],
+    [getCutoutCanvas],
   );
 
   const preset = presetById(settings.presetId);
@@ -1281,6 +1320,9 @@ export default function App() {
                 scaleRef={scaleRef}
                 videoElRef={videoElRef}
                 recording={recordingActive}
+                cutoutState={cutout.state}
+                cutoutBlocked={cutout.blocked}
+                getCutoutCanvas={getCutoutCanvas}
                 onLayoutChange={setCameraLayout}
                 onShape={handleShape}
                 onMirror={() => setCameraLayout((l) => ({ ...l, mirrored: !l.mirrored }))}
