@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { detectPerfTier } from '../capability/tier';
 import { friendlyMediaError } from './mediaErrors';
 
 export interface CameraApi {
@@ -30,8 +31,19 @@ export function useCamera(): CameraApi {
     setBusy(true);
     setError(null);
     try {
+      // Low-tier devices capture at 640×360: the bubble maxes out at 640
+      // stage px and those devices record 720p (1:1 stage scale), so the
+      // smaller stream is sharp at worst-case size while every downstream
+      // consumer (DOM preview, cutout composite + inference, compositor
+      // blit) processes a quarter of the pixels.
+      const ideal =
+        detectPerfTier() === 'low' ? { width: 640, height: 360 } : { width: 1280, height: 720 };
       const s = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
+        video: {
+          width: { ideal: ideal.width },
+          height: { ideal: ideal.height },
+          facingMode: 'user',
+        },
       });
       streamRef.current = s;
       s.getVideoTracks()[0]?.addEventListener('ended', () => {

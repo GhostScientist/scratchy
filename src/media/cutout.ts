@@ -22,6 +22,7 @@
  */
 
 import type { ImageSegmenter, ImageSegmenterResult } from '@mediapipe/tasks-vision';
+import { detectPerfTier } from '../capability/tier';
 
 export type CutoutState = 'idle' | 'loading' | 'ready' | 'failed' | 'unsupported';
 
@@ -31,8 +32,11 @@ export interface CutoutCallbacks {
   onPerformanceFallback(): void;
 }
 
-/** ~30 fps mask updates; the composite itself runs every display frame. */
+/** ~30 fps mask updates; the composite itself runs every display frame.
+ *  Low-tier devices drop to ~15 fps masks — a slightly laggier silhouette
+ *  beats tripping the perf watchdog and losing cutout entirely. */
 const INFERENCE_INTERVAL_MS = 33;
+const LOW_TIER_INFERENCE_INTERVAL_MS = 66;
 /** Segmentation input width — matches the model's internal working size. */
 const INFER_WIDTH = 256;
 /** Median inference budget. Misses only degrade the mask rate (the loop
@@ -45,8 +49,11 @@ const PERF_WINDOW = 30;
 const PERF_WARMUP = 5;
 /** Temporal mask smoothing: new*0.7 + previous*0.3 kills edge flicker. */
 const MASK_BLEND = 0.7;
-/** Edge feather, baked into the full-size mask once per inference. */
+/** Edge feather, baked into the full-size mask once per inference. The
+ *  canvas blur filter is one of the most expensive 2D ops on weak GPUs, so
+ *  low-tier devices use a lighter feather. */
 const MASK_FEATHER_PX = 3;
+const LOW_TIER_FEATHER_PX = 2;
 
 // Dev/test hooks (wired to window.__scratchyCutout in useCutout): let e2e
 // force the failure path and neutralize the perf watchdog on slow CI.
@@ -86,8 +93,13 @@ export class CutoutEngine {
   private lastVideoTime = -1;
   private perfSamples: number[] = [];
   private perfSeen = 0;
+  private readonly inferenceIntervalMs: number;
+  private readonly featherPx: number;
 
   constructor(private cb: CutoutCallbacks) {
+    const low = detectPerfTier() === 'low';
+    this.inferenceIntervalMs = low ? LOW_TIER_INFERENCE_INTERVAL_MS : INFERENCE_INTERVAL_MS;
+    this.featherPx = low ? LOW_TIER_FEATHER_PX : MASK_FEATHER_PX;
     this.canvas = document.createElement('canvas');
     this.inferCanvas = document.createElement('canvas');
     this.maskCanvas = document.createElement('canvas');
@@ -194,7 +206,7 @@ export class CutoutEngine {
   /** Refresh the mask at inference rate on a downscaled frame. */
   private maybeInfer(video: HTMLVideoElement): void {
     const now = performance.now();
-    if (now - this.lastInferenceAt < INFERENCE_INTERVAL_MS) return;
+    if (now - this.lastInferenceAt < this.inferenceIntervalMs) return;
     if (video.currentTime === this.lastVideoTime) return;
     this.lastInferenceAt = now;
     this.lastVideoTime = video.currentTime;
@@ -232,8 +244,12 @@ export class CutoutEngine {
       for (let i = 0; i < data.length; i++) {
         data[i] = data[i] * MASK_BLEND + prev[i] * (1 - MASK_BLEND);
       }
+    } else {
+      this.prevMask = new Float32Array(data.length);
     }
-    this.prevMask = Float32Array.from(data);
+    // Reuse the blend buffer — a fresh ~65k-float allocation per inference
+    // is steady GC pressure on low-RAM devices.
+    this.prevMask.set(data);
 
     const mw = mask.width;
     const mh = mask.height;
@@ -260,7 +276,7 @@ export class CutoutEngine {
     const full = this.maskFullCtx;
     full.clearRect(0, 0, vw, vh);
     full.save();
-    full.filter = `blur(${MASK_FEATHER_PX}px)`;
+    full.filter = `blur(${this.featherPx}px)`;
     full.drawImage(this.maskCanvas, 0, 0, vw, vh);
     full.restore();
   }
