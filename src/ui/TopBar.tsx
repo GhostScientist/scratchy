@@ -80,7 +80,7 @@ export function TopBar(props: TopBarProps) {
     <header className="topbar">
       <div className="brand" aria-hidden="true">
         <span className="brand-dot" />
-        Scratchy
+        <span>Scribble Party</span>
       </div>
       {props.boardsSlot}
       <input

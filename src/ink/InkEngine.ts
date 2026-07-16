@@ -78,6 +78,12 @@ const LASSO_TAP_PX = 6;
 const PAN_TAKEOVER_MS = 150;
 /** ...but only while the provisional stroke is still short (stage px). */
 const PAN_TAKEOVER_TRAVEL_PX = 12;
+/** Fingers must spread/close by this many stage px from the gesture's start
+ *  before pinch-zoom engages — a plain two-finger drag stays a pure pan. */
+const PINCH_INTENT_PX = 24;
+/** ...and by at least this ratio, so close-together fingers don't latch on
+ *  the same absolute drift a wide grip shrugs off. */
+const PINCH_INTENT_RATIO = 1.12;
 
 type Mode =
   | 'idle'
@@ -134,6 +140,10 @@ export class InkEngine {
   private panPoints = new Map<number, Point>();
   private lastCentroid: Point | null = null;
   private lastPinchDist = 0;
+  /** Finger distance when the current two-pointer gesture began. */
+  private pinchStartDist = 0;
+  /** Two-finger moves only zoom once the pinch intent threshold is crossed. */
+  private pinchZoomLatched = false;
   private spacePan = false;
 
   private eraseEntries: { index: number; element: BoardElement }[] = [];
@@ -769,10 +779,24 @@ export class InkEngine {
       }
       if (pts.length === 2) {
         const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
-        if (this.lastPinchDist > 0 && dist > 0) {
-          this.viewport.zoomAt(centroid, dist / this.lastPinchDist);
+        if (this.pinchZoomLatched) {
+          if (this.lastPinchDist > 0 && dist > 0) {
+            this.viewport.zoomAt(centroid, dist / this.lastPinchDist);
+          }
+          this.lastPinchDist = dist;
+        } else if (this.pinchStartDist > 0 && dist > 0) {
+          // Dead-zone: incidental distance wobble during a two-finger drag
+          // must not zoom. Latch only on deliberate spread/close, measured
+          // cumulatively from the gesture's start, then apply the pent-up
+          // factor at once so the canvas tracks the fingers with no jump.
+          const drift = Math.abs(dist - this.pinchStartDist);
+          const ratio = Math.abs(Math.log(dist / this.pinchStartDist));
+          if (drift > PINCH_INTENT_PX && ratio > Math.log(PINCH_INTENT_RATIO)) {
+            this.pinchZoomLatched = true;
+            this.viewport.zoomAt(centroid, dist / this.pinchStartDist);
+            this.lastPinchDist = dist;
+          }
         }
-        this.lastPinchDist = dist;
       }
       this.lastCentroid = centroid;
       return;
@@ -909,6 +933,8 @@ export class InkEngine {
     this.lastCentroid = pts.length > 0 ? centroidOf(pts) : null;
     this.lastPinchDist =
       pts.length === 2 ? Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y) : 0;
+    this.pinchStartDist = this.lastPinchDist;
+    this.pinchZoomLatched = false;
   }
 
   /** Did this lasso stay within a tap's worth of movement on screen? */

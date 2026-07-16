@@ -14,6 +14,16 @@ export default defineConfig({
   use: {
     baseURL: 'http://localhost:4173',
     viewport: { width: 1500, height: 900 },
+    // Same first-launch seeding as the default config (see playwright.config.ts).
+    storageState: {
+      cookies: [],
+      origins: [
+        {
+          origin: 'http://localhost:4173',
+          localStorage: [{ name: 'scratchy.onboarding.v1', value: '1' }],
+        },
+      ],
+    },
     launchOptions: existsSync(PREINSTALLED_CHROMIUM)
       ? { executablePath: PREINSTALLED_CHROMIUM }
       : {},
