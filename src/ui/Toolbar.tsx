@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import type { MouseEvent as ReactMouseEvent } from 'react';
 import { BACKGROUNDS, BACKGROUND_KINDS } from '../lib/backgrounds';
 import type { BackgroundKind, ShapeKind, Tool } from '../types';
 import {
@@ -70,6 +71,10 @@ function shapeIconFor(kind: ShapeKind) {
 
 export function Toolbar(props: ToolbarProps) {
   const [flyout, setFlyout] = useState<Flyout>(null);
+  // Flyout anchor: the trigger button's center, in px from the rail's top.
+  // The rail interior scrolls on short viewports, so the anchor is measured
+  // per-open rather than styled with a static top.
+  const [flyoutTop, setFlyoutTop] = useState(0);
   const rootRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -85,8 +90,30 @@ export function Toolbar(props: ToolbarProps) {
     if (props.collapsed) setFlyout(null);
   }, [props.collapsed]);
 
-  const toggleFlyout = (which: Exclude<Flyout, null>) =>
+  const flyoutTriggerRef = useRef<HTMLButtonElement | null>(null);
+
+  // Keep the flyout's own extent inside the rail even when the trigger
+  // button sits half-clipped at a scroll edge.
+  const anchorFor = (btn: HTMLElement): number => {
+    const rail = rootRef.current;
+    if (!rail) return 0;
+    const b = btn.getBoundingClientRect();
+    const r = rail.getBoundingClientRect();
+    return Math.min(Math.max(b.top + b.height / 2 - r.top, 34), Math.max(r.height - 34, 34));
+  };
+
+  const toggleFlyout = (which: Exclude<Flyout, null>, e: ReactMouseEvent<HTMLButtonElement>) => {
+    flyoutTriggerRef.current = e.currentTarget;
+    setFlyoutTop(anchorFor(e.currentTarget));
     setFlyout((f) => (f === which ? null : which));
+  };
+
+  // The rail interior scrolls on short viewports; keep an open flyout glued
+  // to its trigger button rather than closing (browsers also emit a scroll
+  // when focusing a half-clipped button, which must not dismiss the flyout).
+  const onRailScroll = () => {
+    if (flyoutTriggerRef.current) setFlyoutTop(anchorFor(flyoutTriggerRef.current));
+  };
 
   if (props.collapsed) {
     const ActiveIcon =
@@ -94,57 +121,155 @@ export function Toolbar(props: ToolbarProps) {
         ? shapeIconFor(props.shapeKind)
         : ([...TOOLS, ...TOOLS_AFTER_SHAPE].find((t) => t.tool === props.tool)?.Icon ?? PenIcon);
     return (
-      <button
-        type="button"
-        className="rail-handle"
-        onClick={() => props.onCollapsed(false)}
-        aria-label="Show tools"
-        title="Show tools"
-      >
-        <ActiveIcon />
-        <span className="rail-handle-dot" style={{ background: props.color }} />
-      </button>
+      <div className="rail-wrap">
+        <button
+          type="button"
+          className="rail-handle"
+          onClick={() => props.onCollapsed(false)}
+          aria-label="Show tools"
+          title="Show tools"
+        >
+          <ActiveIcon />
+          <span className="rail-handle-dot" style={{ background: props.color }} />
+        </button>
+      </div>
     );
   }
 
-  return (
-    <div className="rail" ref={rootRef} role="toolbar" aria-label="Drawing tools">
-      {TOOLS.map(({ tool, label, keyHint, Icon }) => (
-        <button
-          key={tool}
-          type="button"
-          className={`rail-btn${props.tool === tool ? ' active' : ''}`}
-          aria-label={`${label} (${keyHint})`}
-          aria-pressed={props.tool === tool}
-          title={`${label} (${keyHint})`}
-          onClick={() => props.onTool(tool)}
-        >
-          <Icon />
-        </button>
-      ))}
+  const ShapeIcon = shapeIconFor(props.shapeKind);
 
-      <div className="rail-slot">
-        {(() => {
-          const ShapeIcon = shapeIconFor(props.shapeKind);
-          return (
+  return (
+    <div className="rail-wrap">
+      <div className="rail" ref={rootRef} role="toolbar" aria-label="Drawing tools">
+        <div className="rail-scroll" onScroll={onRailScroll}>
+          {TOOLS.map(({ tool, label, keyHint, Icon }) => (
             <button
+              key={tool}
               type="button"
-              className={`rail-btn${props.tool === 'shape' ? ' active' : ''}`}
-              aria-label="Shapes (R)"
-              aria-pressed={props.tool === 'shape'}
-              aria-expanded={flyout === 'shape'}
-              title="Shapes (R) — tap again for shape kinds"
-              onClick={() => {
-                if (props.tool === 'shape') toggleFlyout('shape');
-                else props.onTool('shape');
-              }}
+              className={`rail-btn${props.tool === tool ? ' active' : ''}`}
+              aria-label={`${label} (${keyHint})`}
+              aria-pressed={props.tool === tool}
+              title={`${label} (${keyHint})`}
+              onClick={() => props.onTool(tool)}
             >
-              <ShapeIcon />
+              <Icon />
             </button>
-          );
-        })()}
+          ))}
+
+          <button
+            type="button"
+            className={`rail-btn${props.tool === 'shape' ? ' active' : ''}`}
+            aria-label="Shapes (R)"
+            aria-pressed={props.tool === 'shape'}
+            aria-expanded={flyout === 'shape'}
+            title="Shapes (R) — tap again for shape kinds"
+            onClick={(e) => {
+              if (props.tool === 'shape') toggleFlyout('shape', e);
+              else props.onTool('shape');
+            }}
+          >
+            <ShapeIcon />
+          </button>
+
+          {TOOLS_AFTER_SHAPE.map(({ tool, label, keyHint, Icon }) => (
+            <button
+              key={tool}
+              type="button"
+              className={`rail-btn${props.tool === tool ? ' active' : ''}`}
+              aria-label={`${label} (${keyHint})`}
+              aria-pressed={props.tool === tool}
+              title={`${label} (${keyHint})`}
+              onClick={() => props.onTool(tool)}
+            >
+              <Icon />
+            </button>
+          ))}
+
+          <div className="rail-sep" />
+
+          <button
+            type="button"
+            className={`rail-btn${flyout === 'color' ? ' active' : ''}`}
+            aria-label="Ink color"
+            aria-expanded={flyout === 'color'}
+            title="Ink color"
+            onClick={(e) => toggleFlyout('color', e)}
+          >
+            <span className="swatch current" style={{ background: props.color }} />
+          </button>
+
+          <button
+            type="button"
+            className={`rail-btn${flyout === 'width' ? ' active' : ''}`}
+            aria-label="Stroke width"
+            aria-expanded={flyout === 'width'}
+            title="Stroke width"
+            onClick={(e) => toggleFlyout('width', e)}
+          >
+            <span
+              className="width-dot"
+              style={{ width: props.width * 1.4 + 4, height: props.width * 1.4 + 4 }}
+            />
+          </button>
+
+          <div className="rail-sep" />
+
+          <button
+            type="button"
+            className="rail-btn"
+            aria-label="Undo (Z)"
+            title="Undo (Z)"
+            disabled={!props.canUndo}
+            onClick={props.onUndo}
+          >
+            <UndoIcon />
+          </button>
+          <button
+            type="button"
+            className="rail-btn"
+            aria-label="Redo (Shift+Z)"
+            title="Redo (Shift+Z)"
+            disabled={!props.canRedo}
+            onClick={props.onRedo}
+          >
+            <RedoIcon />
+          </button>
+          <button
+            type="button"
+            className="rail-btn"
+            aria-label="Clear page (undoable)"
+            title="Clear page (undoable)"
+            onClick={props.onClear}
+          >
+            <TrashIcon />
+          </button>
+
+          <div className="rail-sep" />
+
+          <button
+            type="button"
+            className={`rail-btn${flyout === 'background' ? ' active' : ''}`}
+            aria-label="Board background"
+            aria-expanded={flyout === 'background'}
+            title="Board background"
+            onClick={(e) => toggleFlyout('background', e)}
+          >
+            <span className={`bg-thumb bg-thumb-${props.background}`} />
+          </button>
+
+          <button
+            type="button"
+            className="rail-btn rail-collapse"
+            aria-label="Hide tools"
+            title="Hide tools"
+            onClick={() => props.onCollapsed(true)}
+          >
+            <ChevronLeftIcon />
+          </button>
+        </div>
+
         {flyout === 'shape' && (
-          <div className="flyout" role="menu" aria-label="Shape kinds">
+          <div className="flyout" role="menu" aria-label="Shape kinds" style={{ top: flyoutTop }}>
             {SHAPE_KINDS.map(({ kind, label, Icon }) => (
               <button
                 key={kind}
@@ -162,37 +287,9 @@ export function Toolbar(props: ToolbarProps) {
             ))}
           </div>
         )}
-      </div>
 
-      {TOOLS_AFTER_SHAPE.map(({ tool, label, keyHint, Icon }) => (
-        <button
-          key={tool}
-          type="button"
-          className={`rail-btn${props.tool === tool ? ' active' : ''}`}
-          aria-label={`${label} (${keyHint})`}
-          aria-pressed={props.tool === tool}
-          title={`${label} (${keyHint})`}
-          onClick={() => props.onTool(tool)}
-        >
-          <Icon />
-        </button>
-      ))}
-
-      <div className="rail-sep" />
-
-      <div className="rail-slot">
-        <button
-          type="button"
-          className={`rail-btn${flyout === 'color' ? ' active' : ''}`}
-          aria-label="Ink color"
-          aria-expanded={flyout === 'color'}
-          title="Ink color"
-          onClick={() => toggleFlyout('color')}
-        >
-          <span className="swatch current" style={{ background: props.color }} />
-        </button>
         {flyout === 'color' && (
-          <div className="flyout" role="menu" aria-label="Colors">
+          <div className="flyout" role="menu" aria-label="Colors" style={{ top: flyoutTop }}>
             {INK_COLORS.map((c) => (
               <button
                 key={c}
@@ -209,24 +306,14 @@ export function Toolbar(props: ToolbarProps) {
             ))}
           </div>
         )}
-      </div>
 
-      <div className="rail-slot">
-        <button
-          type="button"
-          className={`rail-btn${flyout === 'width' ? ' active' : ''}`}
-          aria-label="Stroke width"
-          aria-expanded={flyout === 'width'}
-          title="Stroke width"
-          onClick={() => toggleFlyout('width')}
-        >
-          <span
-            className="width-dot"
-            style={{ width: props.width * 1.4 + 4, height: props.width * 1.4 + 4 }}
-          />
-        </button>
         {flyout === 'width' && (
-          <div className="flyout" role="menu" aria-label="Stroke widths">
+          <div
+            className="flyout"
+            role="menu"
+            aria-label="Stroke widths"
+            style={{ top: flyoutTop }}
+          >
             {INK_WIDTHS.map((w) => (
               <button
                 key={w}
@@ -243,55 +330,9 @@ export function Toolbar(props: ToolbarProps) {
             ))}
           </div>
         )}
-      </div>
 
-      <div className="rail-sep" />
-
-      <button
-        type="button"
-        className="rail-btn"
-        aria-label="Undo (Z)"
-        title="Undo (Z)"
-        disabled={!props.canUndo}
-        onClick={props.onUndo}
-      >
-        <UndoIcon />
-      </button>
-      <button
-        type="button"
-        className="rail-btn"
-        aria-label="Redo (Shift+Z)"
-        title="Redo (Shift+Z)"
-        disabled={!props.canRedo}
-        onClick={props.onRedo}
-      >
-        <RedoIcon />
-      </button>
-      <button
-        type="button"
-        className="rail-btn"
-        aria-label="Clear page (undoable)"
-        title="Clear page (undoable)"
-        onClick={props.onClear}
-      >
-        <TrashIcon />
-      </button>
-
-      <div className="rail-sep" />
-
-      <div className="rail-slot">
-        <button
-          type="button"
-          className={`rail-btn${flyout === 'background' ? ' active' : ''}`}
-          aria-label="Board background"
-          aria-expanded={flyout === 'background'}
-          title="Board background"
-          onClick={() => toggleFlyout('background')}
-        >
-          <span className={`bg-thumb bg-thumb-${props.background}`} />
-        </button>
         {flyout === 'background' && (
-          <div className="flyout" role="menu" aria-label="Backgrounds">
+          <div className="flyout" role="menu" aria-label="Backgrounds" style={{ top: flyoutTop }}>
             {BACKGROUND_KINDS.map((kind) => (
               <button
                 key={kind}
@@ -310,16 +351,6 @@ export function Toolbar(props: ToolbarProps) {
           </div>
         )}
       </div>
-
-      <button
-        type="button"
-        className="rail-btn rail-collapse"
-        aria-label="Hide tools"
-        title="Hide tools"
-        onClick={() => props.onCollapsed(true)}
-      >
-        <ChevronLeftIcon />
-      </button>
     </div>
   );
 }

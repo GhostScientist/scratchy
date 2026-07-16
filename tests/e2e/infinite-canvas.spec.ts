@@ -257,3 +257,49 @@ test('pinch pan-zoom with two touch pointers', async ({ page }) => {
   expect(after.zoom).toBeGreaterThan(before.zoom);
   expect(await strokes(page)).toHaveLength(0);
 });
+
+test('two-finger drag pans without zooming despite finger wobble', async ({ page }) => {
+  const box = await stageBox(page);
+  const cx = box.x + box.width / 2;
+  const cy = box.y + box.height / 2;
+
+  const before = await viewportState(page);
+  // Both fingers travel together; their spacing wobbles ±8 px the way real
+  // fingers do. That wobble must stay inside the pinch dead-zone.
+  await page.evaluate(
+    ([x, y]) => {
+      const el = document.querySelector('.stage-input')!;
+      const fire = (type: string, id: number, px: number, py: number) =>
+        el.dispatchEvent(
+          new PointerEvent(type, {
+            pointerId: id,
+            pointerType: 'touch',
+            clientX: px,
+            clientY: py,
+            isPrimary: id === 1,
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+      fire('pointerdown', 1, x - 50, y);
+      fire('pointerdown', 2, x + 50, y); // lands immediately → pan takeover
+      // Real touch input arrives as many small per-finger increments; keep
+      // each synthetic step small so transient spacing changes stay realistic.
+      const steps = 20;
+      for (let step = 1; step <= steps; step += 1) {
+        const dx = step * 8; // 160 px total travel
+        const wobble = Math.round(4 * Math.sin(step / 2)); // spacing ±8 px
+        fire('pointermove', 1, x - 50 + dx - wobble, y);
+        fire('pointermove', 2, x + 50 + dx + wobble, y);
+      }
+      fire('pointerup', 1, x - 50 + 160, y);
+      fire('pointerup', 2, x + 50 + 160, y);
+    },
+    [cx, cy],
+  );
+
+  const after = await viewportState(page);
+  expect(after.zoom).toBe(before.zoom); // zoomAt never fired
+  expect(after.x).toBeLessThan(before.x); // dragged right → world origin moved left
+  expect(await strokes(page)).toHaveLength(0);
+});

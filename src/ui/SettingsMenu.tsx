@@ -16,6 +16,8 @@ interface SettingsMenuProps {
   deviceSummary: string | null;
   deviceChecking: boolean;
   onDeviceCheck(): void;
+  /** Re-open the first-launch welcome tour. */
+  onReplayTour(): void;
 }
 
 export function SettingsMenu(props: SettingsMenuProps) {
@@ -104,6 +106,16 @@ export function SettingsMenu(props: SettingsMenuProps) {
             onClick={props.onDeviceCheck}
           >
             {props.deviceChecking ? 'Checking…' : 'Run device check'}
+          </button>
+          <div className="settings-label">Scribble Party</div>
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              props.onReplayTour();
+            }}
+          >
+            Replay welcome tour
           </button>
         </div>
       )}

@@ -1,4 +1,4 @@
-# Scratchy Studio
+# Scribble Party
 
 A tablet-first, local-first whiteboard teaching studio (see `SPEC.md`): write on an
 infinite lesson canvas, place a live webcam bubble over it, record the composed stage

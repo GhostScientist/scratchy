@@ -11,6 +11,17 @@ export default defineConfig({
   use: {
     baseURL: 'http://localhost:5173',
     viewport: { width: 1500, height: 900 },
+    // Specs start from a fresh origin; mark the first-launch welcome tour as
+    // seen so it doesn't cover the app. onboarding.spec.ts opts back out.
+    storageState: {
+      cookies: [],
+      origins: [
+        {
+          origin: 'http://localhost:5173',
+          localStorage: [{ name: 'scratchy.onboarding.v1', value: '1' }],
+        },
+      ],
+    },
     launchOptions: {
       // Fake camera/mic so recording tests never hit a permission prompt.
       args: [

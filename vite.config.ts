@@ -14,8 +14,8 @@ export default defineConfig({
     VitePWA({
       registerType: 'autoUpdate',
       manifest: {
-        name: 'Scratchy Studio',
-        short_name: 'Scratchy',
+        name: 'Scribble Party',
+        short_name: 'Scribble',
         description:
           'Local-first whiteboard teaching studio — draw, record, and export lessons entirely in the browser.',
         display: 'standalone',
@@ -38,6 +38,8 @@ export default defineConfig({
         // The compiled app is small; precache everything the build emits.
         // mjs covers the pdf.js worker chunk so PDF import works offline;
         // wasm + tflite cover the camera-cutout segmentation assets.
+        // mp4 is deliberately absent: onboarding demo clips (public/onboarding/)
+        // are large, optional, and gracefully replaced by built-in art offline.
         globPatterns: ['**/*.{js,mjs,css,html,png,svg,wasm,tflite,webmanifest}'],
         // The pdf.js library + worker are ~1-2 MB each and the MediaPipe
         // vision wasm is ~11 MB — all above workbox's 2 MiB default cap,

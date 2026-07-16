@@ -42,6 +42,12 @@ import { ExportMenu } from './ui/ExportMenu';
 import { SettingsMenu } from './ui/SettingsMenu';
 import { loadSettings, saveSettings } from './settings/settings';
 import type { AppSettings } from './settings/settings';
+import { OnboardingModal } from './onboarding/OnboardingModal';
+import {
+  ONBOARDING_VERSION,
+  markOnboardingSeen,
+  seenOnboardingVersion,
+} from './onboarding/onboardingStorage';
 import { ensureDeviceProfile } from './capability/probe';
 import { loadDeviceProfile } from './capability/profile';
 import type { DeviceProfile } from './capability/profile';
@@ -125,6 +131,11 @@ export default function App() {
       return next;
     });
   }, []);
+
+  // First-launch welcome tour; replayable from the settings menu.
+  const [onboardingOpen, setOnboardingOpen] = useState(
+    () => seenOnboardingVersion() < ONBOARDING_VERSION,
+  );
 
   // Capability profile (SPEC §9) — probed lazily before the first recording.
   const [deviceProfile, setDeviceProfile] = useState<DeviceProfile | null>(loadDeviceProfile);
@@ -1242,6 +1253,7 @@ export default function App() {
             deviceSummary={deviceSummary}
             deviceChecking={probing}
             onDeviceCheck={handleDeviceCheck}
+            onReplayTour={() => setOnboardingOpen(true)}
           />
         }
         onLibrary={activeBoardId ? handleOpenTakes : undefined}
@@ -1423,6 +1435,21 @@ export default function App() {
           onDiscard={handleDiscardSession}
         />
       )}
+
+      {/* Crash recovery outranks the welcome tour; on a true first launch
+          there is never a recoverable session, so the tour shows directly. */}
+      {onboardingOpen &&
+        recoverable.length === 0 &&
+        !recovered &&
+        !recorder.take &&
+        recorder.phase === 'idle' && (
+          <OnboardingModal
+            onClose={() => {
+              markOnboardingSeen();
+              setOnboardingOpen(false);
+            }}
+          />
+        )}
 
       {recovered && (
         <PreviewModal

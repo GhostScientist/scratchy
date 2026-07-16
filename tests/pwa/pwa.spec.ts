@@ -25,7 +25,7 @@ test('the web app manifest is complete and installable', async ({ page, request 
   await page.goto('/');
   const href = await page.locator('link[rel="manifest"]').getAttribute('href');
   const manifest = await (await request.get(new URL(href!, 'http://localhost:4173').href)).json();
-  expect(manifest.name).toBe('Scratchy Studio');
+  expect(manifest.name).toBe('Scribble Party');
   expect(manifest.display).toBe('standalone');
   expect(manifest.icons.length).toBeGreaterThanOrEqual(3);
   for (const icon of manifest.icons) {
