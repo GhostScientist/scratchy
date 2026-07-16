@@ -1,5 +1,5 @@
 import { clamp } from '../lib/geometry';
-import { STAGE_WIDTH, STAGE_HEIGHT, BACKING_SCALE, MIN_ZOOM, MAX_ZOOM } from '../types';
+import { STAGE_WIDTH, STAGE_HEIGHT, MIN_ZOOM, MAX_ZOOM } from '../types';
 import type { ViewportState } from '../types';
 import type { BBox } from '../lib/strokes';
 
@@ -83,9 +83,11 @@ export class Viewport {
   /**
    * Install this viewport as the context transform so drawing happens in
    * world coordinates. outScale is the backing-store multiplier of the target
-   * canvas: BACKING_SCALE for display layers, 1 for the recording compositor.
+   * canvas: the engine's current backing scale for display layers, 1 for the
+   * recording compositor. Always explicit — a default here silently
+   * desynchronizes callers from the engine's adaptive backing.
    */
-  applyTo(ctx: CanvasRenderingContext2D, outScale = BACKING_SCALE): void {
+  applyTo(ctx: CanvasRenderingContext2D, outScale: number): void {
     const s = outScale * this.zoom;
     ctx.setTransform(s, 0, 0, s, -this.x * s, -this.y * s);
   }

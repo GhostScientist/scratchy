@@ -3,7 +3,7 @@ import { drawElement } from '../lib/elements';
 import { drawLaserTrail } from '../lib/laser';
 import type { LaserPoint } from '../lib/laser';
 import { coverCrop, cameraClipPath } from '../lib/geometry';
-import { BACKING_SCALE } from '../types';
+import { STAGE_WIDTH } from '../types';
 import type { BackgroundKind, BoardElement, CameraLayout, ViewportState } from '../types';
 import { effectiveView, outputCrop } from './presets';
 import type { OutputCrop, RecordingPreset } from './presets';
@@ -117,19 +117,21 @@ export class Compositor {
 
     drawBackground(ctx, this.sources.getBackground(), { ...eff, outW, outH });
 
-    // The ink cache always holds the current viewport's view at 2×, so a
-    // source-rect blit of the crop keeps the recording glued to the viewport
-    // (a clean downscale for 1080p, a mild upscale for vertical). It is
+    // The ink cache always holds the current viewport's view, so a
+    // source-rect blit of the crop keeps the recording glued to the viewport.
+    // The cache's backing scale is adaptive — derive it from the canvas
+    // itself so the blit stays correct whatever the engine chose. It is
     // rebuilt on the engine's rAF, so a frame sampled mid-pan can be one
     // frame stale relative to the active stroke — invisible at 30 fps.
     const ink = this.sources.getInkCanvas();
     if (ink) {
+      const inkScale = ink.width / STAGE_WIDTH;
       ctx.drawImage(
         ink,
-        crop.x * BACKING_SCALE,
-        crop.y * BACKING_SCALE,
-        crop.w * BACKING_SCALE,
-        crop.h * BACKING_SCALE,
+        crop.x * inkScale,
+        crop.y * inkScale,
+        crop.w * inkScale,
+        crop.h * inkScale,
         0,
         0,
         outW,

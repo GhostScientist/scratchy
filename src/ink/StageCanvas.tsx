@@ -3,8 +3,24 @@ import { InkEngine } from './InkEngine';
 import type { TextEditRequest } from './InkEngine';
 import { Viewport } from './Viewport';
 import { drawBackground } from '../lib/backgrounds';
+import { detectPerfTier } from '../capability/tier';
 import { STAGE_WIDTH, STAGE_HEIGHT, BACKING_SCALE } from '../types';
 import type { BackgroundKind, ShapeKind, Tool } from '../types';
+
+/**
+ * Backing-store multiplier for the stage layers: enough device pixels to be
+ * crisp at the stage's actual on-screen size, never more than BACKING_SCALE.
+ * A 1×-DPR budget tablet gets ~1× buffers (4× fewer pixels per frame than the
+ * old fixed 2×); a hi-dpr or large desktop stage still gets its full 2×.
+ * Quantized to 0.25 steps so resize jitter doesn't thrash canvas reallocation.
+ */
+function computeBackingScale(canvas: HTMLCanvasElement): number {
+  const cssWidth = canvas.getBoundingClientRect().width || STAGE_WIDTH;
+  const raw = (window.devicePixelRatio || 1) * (cssWidth / STAGE_WIDTH);
+  const cap = detectPerfTier() === 'low' ? 1.5 : BACKING_SCALE;
+  const quantized = Math.round(raw * 4) / 4;
+  return Math.min(cap, Math.max(1, quantized));
+}
 
 interface StageCanvasProps {
   background: BackgroundKind;
@@ -43,6 +59,8 @@ export function StageCanvas(props: StageCanvasProps) {
     onSelectionChange: props.onSelectionChange,
   };
 
+  const backingRef = useRef(BACKING_SCALE);
+
   const redrawBackground = () => {
     const canvas = bgRef.current;
     const viewport = viewportRef.current;
@@ -50,7 +68,8 @@ export function StageCanvas(props: StageCanvasProps) {
     // Opaque layer (drawBackground always lays a base fill) — lets the
     // browser skip alpha blending when compositing the stage stack.
     const ctx = canvas.getContext('2d', { alpha: false })!;
-    ctx.setTransform(BACKING_SCALE, 0, 0, BACKING_SCALE, 0, 0);
+    const backing = backingRef.current;
+    ctx.setTransform(backing, 0, 0, backing, 0, 0);
     drawBackground(ctx, bgKindRef.current, {
       ...viewport.get(),
       outW: STAGE_WIDTH,
@@ -62,18 +81,42 @@ export function StageCanvas(props: StageCanvasProps) {
 
   useEffect(() => {
     const bgCanvas = bgRef.current!;
-    bgCanvas.width = STAGE_WIDTH * BACKING_SCALE;
-    bgCanvas.height = STAGE_HEIGHT * BACKING_SCALE;
+    backingRef.current = computeBackingScale(bgCanvas);
+    bgCanvas.width = STAGE_WIDTH * backingRef.current;
+    bgCanvas.height = STAGE_HEIGHT * backingRef.current;
 
     const viewport = new Viewport();
-    const engine = new InkEngine(inkRef.current!, activeRef.current!, viewport, {
-      onHistoryChange: (u, r) => cbRef.current.onHistoryChange(u, r),
-      onCommit: () => cbRef.current.onCommit(),
-      onTextEdit: (req) => cbRef.current.onTextEdit(req),
-      onSelectionChange: () => cbRef.current.onSelectionChange(),
-    });
+    const engine = new InkEngine(
+      inkRef.current!,
+      activeRef.current!,
+      viewport,
+      {
+        onHistoryChange: (u, r) => cbRef.current.onHistoryChange(u, r),
+        onCommit: () => cbRef.current.onCommit(),
+        onTextEdit: (req) => cbRef.current.onTextEdit(req),
+        onSelectionChange: () => cbRef.current.onSelectionChange(),
+      },
+      backingRef.current,
+    );
     engineRef.current = engine;
     viewportRef.current = viewport;
+
+    // Rotation / window resize changes the stage's on-screen size — follow
+    // it (debounced; the engine defers the change if a recording is live).
+    let resizeTimer = 0;
+    const onResize = () => {
+      window.clearTimeout(resizeTimer);
+      resizeTimer = window.setTimeout(() => {
+        const next = computeBackingScale(bgCanvas);
+        if (next === backingRef.current) return;
+        backingRef.current = next;
+        bgCanvas.width = STAGE_WIDTH * next;
+        bgCanvas.height = STAGE_HEIGHT * next;
+        engine.setBackingScale(next);
+        redrawRef.current();
+      }, 300);
+    };
+    window.addEventListener('resize', onResize);
 
     // Background scrolls with the world; coalesce pan/pinch bursts into one
     // redraw per frame.
@@ -95,6 +138,8 @@ export function StageCanvas(props: StageCanvasProps) {
     return () => {
       unsubscribe();
       cancelAnimationFrame(bgRaf);
+      window.removeEventListener('resize', onResize);
+      window.clearTimeout(resizeTimer);
       engine.destroy();
       engineRef.current = null;
       viewportRef.current = null;

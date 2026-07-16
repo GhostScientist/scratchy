@@ -909,6 +909,20 @@ export default function App() {
     recorder.phase === 'paused' ||
     recorder.phase === 'stopping';
 
+  // Recording quality guard: the compositor blits the ink cache into the
+  // output, so hold the backing at the preset's needs for the whole take
+  // (2 for 1080p/vertical — parity with the old fixed scale; 720p records
+  // cleanly from whatever the display uses). Also freezes resize-driven
+  // backing changes mid-take, which would blank the cache for a frame.
+  useEffect(() => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    if (recordingActive) {
+      engine.pinBackingScale(presetRef.current.needsPerformance ? 2 : 1);
+      return () => engine.unpinBackingScale();
+    }
+  }, [recordingActive]);
+
   // DEV hook so e2e tests can poll the recorder without driving the UI.
   const recorderApiRef = useRef(recorder);
   recorderApiRef.current = recorder;

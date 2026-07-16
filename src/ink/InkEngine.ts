@@ -167,6 +167,12 @@ export class InkEngine {
   /** Bumped on every painted frame — lets the recording compositor skip
    *  re-compositing when nothing visible has changed. */
   private frameRevision = 0;
+  /** Backing-store multiplier actually in use (≤ BACKING_SCALE; adapted to
+   *  devicePixelRatio × on-screen stage size so budget 1×-DPR devices don't
+   *  rasterize 4× the pixels their panel can show). */
+  private backing: number;
+  private backingBase: number = BACKING_SCALE;
+  private backingPin: number | null = null;
   private destroyed = false;
   private unsubscribeViewport: () => void;
   private unsubscribeImageCache: () => void;
@@ -176,7 +182,10 @@ export class InkEngine {
     private activeCanvas: HTMLCanvasElement,
     readonly viewport: Viewport,
     private cb: InkEngineCallbacks,
+    backingScale: number = BACKING_SCALE,
   ) {
+    this.backing = backingScale;
+    this.backingBase = backingScale;
     this.inkCtx = this.setupCanvas(inkCanvas);
     this.activeCtx = this.setupCanvas(activeCanvas);
 
@@ -216,11 +225,11 @@ export class InkEngine {
   }
 
   private setupCanvas(canvas: HTMLCanvasElement): CanvasRenderingContext2D {
-    canvas.width = STAGE_WIDTH * BACKING_SCALE;
-    canvas.height = STAGE_HEIGHT * BACKING_SCALE;
+    canvas.width = STAGE_WIDTH * this.backing;
+    canvas.height = STAGE_HEIGHT * this.backing;
     const ctx = canvas.getContext('2d');
     if (!ctx) throw new Error('Canvas 2D is not available');
-    ctx.setTransform(BACKING_SCALE, 0, 0, BACKING_SCALE, 0, 0);
+    ctx.setTransform(this.backing, 0, 0, this.backing, 0, 0);
     return ctx;
   }
 
@@ -499,6 +508,41 @@ export class InkEngine {
    *  rAF, so an unchanged value means the stage content is static. */
   getFrameRevision(): number {
     return this.frameRevision;
+  }
+
+  getBackingScale(): number {
+    return this.backing;
+  }
+
+  /** Change the preferred backing scale (e.g. after a resize). While a
+   *  recording pin is active the value is stored and applied on unpin —
+   *  resizing the canvases mid-take would hand the compositor a blank frame. */
+  setBackingScale(scale: number): void {
+    this.backingBase = scale;
+    if (this.backingPin !== null) return;
+    this.applyBacking(scale);
+  }
+
+  /** Recording quality guard: hold the backing at ≥ `scale` for the take so
+   *  a 1080p/vertical recording never upscales from a low-res ink cache. */
+  pinBackingScale(scale: number): void {
+    this.backingPin = scale;
+    this.applyBacking(Math.max(this.backingBase, scale));
+  }
+
+  unpinBackingScale(): void {
+    this.backingPin = null;
+    this.applyBacking(this.backingBase);
+  }
+
+  private applyBacking(scale: number): void {
+    if (scale === this.backing) return;
+    this.backing = scale;
+    // Resizing clears the canvases; the rebuild below repaints everything.
+    this.inkCtx = this.setupCanvas(this.inkCanvas);
+    this.activeCtx = this.setupCanvas(this.activeCanvas);
+    this.cacheDirty = true;
+    this.requestRepaint();
   }
 
   getLaserTrail(): readonly LaserPoint[] {
@@ -1172,7 +1216,7 @@ export class InkEngine {
     const ctx = this.inkCtx;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, this.inkCanvas.width, this.inkCanvas.height);
-    this.viewport.applyTo(ctx);
+    this.viewport.applyTo(ctx, this.backing);
     const view = this.viewport.visibleWorldRect();
     for (const el of this.elements) {
       if (el.id === this.hiddenElementId) continue;
@@ -1208,7 +1252,7 @@ export class InkEngine {
     const ctx = this.activeCtx;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, this.activeCanvas.width, this.activeCanvas.height);
-    this.viewport.applyTo(ctx);
+    this.viewport.applyTo(ctx, this.backing);
     if (this.active) drawStroke(ctx, this.active);
     if (this.activeShape) drawElement(ctx, this.activeShape);
     if (this.lassoPoints.length > 1) {
@@ -1228,7 +1272,7 @@ export class InkEngine {
     }
     if (this.tool === 'select' && this.selectedIds.size > 0) {
       // Selection HUD: dashed bbox per element, screen-space line weight.
-      ctx.setTransform(BACKING_SCALE, 0, 0, BACKING_SCALE, 0, 0);
+      ctx.setTransform(this.backing, 0, 0, this.backing, 0, 0);
       ctx.save();
       ctx.strokeStyle = 'rgba(110, 168, 255, 0.95)';
       ctx.lineWidth = 1.5;
@@ -1265,13 +1309,13 @@ export class InkEngine {
         }
         ctx.restore();
       }
-      this.viewport.applyTo(ctx);
+      this.viewport.applyTo(ctx, this.backing);
     }
     if (this.laserTrail.length > 0) {
       const now = performance.now();
       this.laserTrail = pruneLaserTrail(this.laserTrail, now);
       if (this.laserTrail.length > 0) {
-        ctx.setTransform(BACKING_SCALE, 0, 0, BACKING_SCALE, 0, 0);
+        ctx.setTransform(this.backing, 0, 0, this.backing, 0, 0);
         drawLaserTrail(ctx, this.laserTrail, this.viewport.get(), now);
         // Keep repainting until the trail has fully faded out.
         this.requestRepaint();
@@ -1279,7 +1323,7 @@ export class InkEngine {
     }
     if (this.tool === 'eraser' && this.cursor) {
       // The cursor is a screen-space HUD: constant size regardless of zoom.
-      ctx.setTransform(BACKING_SCALE, 0, 0, BACKING_SCALE, 0, 0);
+      ctx.setTransform(this.backing, 0, 0, this.backing, 0, 0);
       const p = this.viewport.worldToStage(this.cursor);
       ctx.save();
       ctx.strokeStyle = 'rgba(90, 100, 120, 0.75)';
