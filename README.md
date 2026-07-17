@@ -5,6 +5,8 @@ infinite lesson canvas, place a live webcam bubble over it, record the composed 
 with microphone audio entirely in the browser, then preview and download the video.
 Nothing is ever uploaded.
 
+This originally started as an experiment in building things from my phone using /remote-control and /goal against a detailed spec. I dictated the architecture and featurese into a clear PRD, and used this as the /goal for Fable. I expected Fable to succeed, and my expectations were met. Another aspect of this project is towards a signal I'd like to send to the builder community: Agents can help you build incredible things for people for free. These tokens were spent, and even if I don't touch this project again...something of value was created. I do hope people find this useful and valuable. Talking head content can be created on cheap hardware with no installs, and then you just drag and drop the recorded file into whatever platform you want. All for free, and since this is open source: no one can take it away! :)
+
 ## Run it
 
 ```bash
