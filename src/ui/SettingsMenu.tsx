@@ -83,7 +83,7 @@ export function SettingsMenu(props: SettingsMenuProps) {
                   className={props.presetId === p.id ? 'active' : ''}
                   aria-pressed={props.presetId === p.id}
                   aria-label={`${p.label} preset`}
-                  title={gatedOff ? `${p.description} — needs a faster device` : p.description}
+                  title={gatedOff ? `${p.description} (needs a faster device)` : p.description}
                   disabled={props.presetLocked || gatedOff}
                   onClick={() => props.onPreset(p.id)}
                 >
@@ -98,7 +98,7 @@ export function SettingsMenu(props: SettingsMenuProps) {
           </p>
           <div className="settings-label">This device</div>
           <p className="settings-device">
-            {props.deviceSummary ?? 'Not checked yet — runs before your first recording.'}
+            {props.deviceSummary ?? 'Not checked yet. It runs before your first recording.'}
           </p>
           <button
             type="button"

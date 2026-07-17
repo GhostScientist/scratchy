@@ -200,8 +200,8 @@ export default function App() {
       });
       pushToast(
         reason === 'performance'
-          ? 'Background removal is too slow on this device — switched back to the rounded camera.'
-          : 'Background removal is unavailable in this browser — switched back to the rounded camera.',
+          ? 'Background removal is too slow on this device. Switched back to the rounded camera.'
+          : 'Background removal is unavailable in this browser. Switched back to the rounded camera.',
       );
     },
     [pushToast],
@@ -267,7 +267,7 @@ export default function App() {
   const warnSaveFailed = useCallback(() => {
     if (quotaWarned.current) return;
     quotaWarned.current = true;
-    pushToast('Autosave paused — device storage may be full.');
+    pushToast('Autosave paused. Device storage may be full.');
   }, [pushToast]);
 
   /** Persist the current lesson under boardId (captured by the caller when
@@ -645,7 +645,7 @@ export default function App() {
       try {
         const result = await importPdf(file, (done, total) => setPdfProgress({ done, total }));
         if (result.totalPages > result.pages.length) {
-          pushToast(`Long PDF — imported the first ${MAX_PDF_PAGES} pages.`);
+          pushToast(`Long PDF. Imported the first ${MAX_PDF_PAGES} pages.`);
         }
         if (result.pages.length === 0) return;
         syncActivePage();
@@ -682,7 +682,7 @@ export default function App() {
         pushToast('Only images and PDFs can be imported.');
         return;
       }
-      if (pdfs.length > 1) pushToast('One PDF at a time — importing the first.');
+      if (pdfs.length > 1) pushToast('One PDF at a time. Importing the first one.');
       if (images.length > 0) {
         void importImageFiles(images, { engine, viewport, toast: pushToast });
       }
@@ -726,7 +726,7 @@ export default function App() {
         kind === 'view' ? await exportViewPng(engine, viewport, bg) : await exportBoardPng(engine, bg);
       if (!blob) {
         pushToast(
-          kind === 'board' ? 'Nothing to export — the board is empty.' : 'Export failed.',
+          kind === 'board' ? 'Nothing to export, the board is empty.' : 'Export failed.',
         );
         return;
       }
@@ -934,26 +934,26 @@ export default function App() {
         // hard-block — let the real recorder be the judge.
         pushToast(
           result.profile.warnings[0] ??
-            'The device check could not verify recording — trying anyway.',
+            'The device check could not verify recording. Trying anyway.',
         );
       }
       // A gated preset can outlive a re-probe that says no — drop back.
       if (presetRef.current.needsPerformance && !result.profile.supports1080p) {
         presetRef.current = presetById('compat');
         updateSettings({ presetId: 'compat' });
-        pushToast('Dropped to 720p — this device failed the 1080p performance check.');
+        pushToast('Dropped to 720p because this device failed the 1080p performance check.');
       }
       // SPEC §6.6: check storage headroom before recording, warn — don't block.
       try {
         const est = await navigator.storage?.estimate?.();
         if (est?.quota && est.quota - (est.usage ?? 0) < 200 * 1024 * 1024) {
-          pushToast('Device storage is low — long recordings may not save.');
+          pushToast('Device storage is low, so long recordings may not save.');
         }
       } catch {
         // Estimate is a nicety only.
       }
       if (!mic.enabled) {
-        pushToast('Recording without microphone — tap the mic to add your voice.');
+        pushToast('Recording without the microphone. Tap the mic to add your voice.');
       }
       if (!tabHintShown.current) {
         tabHintShown.current = true;
@@ -974,7 +974,7 @@ export default function App() {
         pushToast(
           result.profile.warnings.length > 0
             ? result.profile.warnings[0]
-            : 'Device check passed — this browser records fine.',
+            : 'Device check passed. This browser records fine.',
         );
       } else {
         pushToast(result.reason);
@@ -1006,7 +1006,7 @@ export default function App() {
         if (profile.supports1080p) {
           updateSettings({ presetId: next.id });
         } else {
-          pushToast('This device failed the 1080p performance check — staying at 720p.');
+          pushToast('This device failed the 1080p performance check, so it stays at 720p.');
         }
       })();
     },
@@ -1372,7 +1372,7 @@ export default function App() {
             <ZoomControls
               engine={nav.engine}
               viewport={nav.viewport}
-              onEmptyFit={() => pushToast('Nothing to fit — the board is empty.')}
+              onEmptyFit={() => pushToast('Nothing to fit, the board is empty.')}
             />
           </div>
         )}
@@ -1479,7 +1479,7 @@ export default function App() {
           <div className="pdf-progress-card">
             <span className="spinner" aria-hidden="true" />
             {pdfProgress.total > 0
-              ? `Importing PDF — page ${pdfProgress.done} / ${pdfProgress.total}`
+              ? `Importing PDF, page ${pdfProgress.done} of ${pdfProgress.total}`
               : 'Reading PDF…'}
           </div>
         </div>

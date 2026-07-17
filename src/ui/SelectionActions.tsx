@@ -47,7 +47,7 @@ export function SelectionActions({ viewport, bbox, locked, onToggleLock }: Selec
         type="button"
         className="selection-action-btn"
         aria-label={locked ? 'Unlock image' : 'Lock image'}
-        title={locked ? 'Unlock — allow moving and erasing' : 'Lock — pin under your annotations'}
+        title={locked ? 'Unlock to allow moving and erasing' : 'Lock to pin it under your annotations'}
         onClick={onToggleLock}
       >
         {locked ? <UnlockIcon /> : <LockIcon />}

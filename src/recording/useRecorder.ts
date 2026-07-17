@@ -143,7 +143,7 @@ export function useRecorder(
       const blob = await store.finalizeSession(sessionId, mimeType);
       if (blob.size === 0) {
         void store.deleteSession(sessionId);
-        setError('The recording produced no data — this browser may not support canvas recording.');
+        setError('The recording produced no data. This browser may not support canvas recording.');
         setPhase('idle');
         return;
       }
@@ -202,7 +202,7 @@ export function useRecorder(
         storeRef.current ??
         (storeRef.current = createRecordingStore(() => {
           warnRef.current?.(
-            'Recording chunks stopped persisting — this take continues in memory. Your lesson is safe.',
+            'Recording chunks stopped persisting, so this take continues in memory. Your lesson is safe.',
           );
         }));
       const meta = getSessionMetaRef.current();
@@ -243,7 +243,7 @@ export function useRecorder(
         });
       };
       recorder.onerror = () => {
-        failRecording('Recording failed — the browser reported an encoder error. Your lesson is safe.');
+        failRecording('Recording failed, the browser reported an encoder error. Your lesson is safe.');
       };
       recorder.onstop = finalize;
       recorderRef.current = recorder;

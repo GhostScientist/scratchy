@@ -17,7 +17,7 @@ export default defineConfig({
         name: 'Scribble Party',
         short_name: 'Scribble',
         description:
-          'Local-first whiteboard teaching studio — draw, record, and export lessons entirely in the browser.',
+          'Local-first whiteboard teaching studio. Draw, record, and export lessons entirely in the browser.',
         display: 'standalone',
         orientation: 'any',
         background_color: '#101114',

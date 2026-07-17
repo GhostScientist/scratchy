@@ -152,7 +152,7 @@ export function Minimap({ engine, viewport, background, revision }: MinimapProps
       width={MAP_W * DPR}
       height={MAP_H * DPR}
       role="button"
-      aria-label="Board overview — tap to move the view"
+      aria-label="Board overview, tap to move the view"
       onPointerDown={(e) => {
         e.currentTarget.setPointerCapture(e.pointerId);
         jumpTo(e);

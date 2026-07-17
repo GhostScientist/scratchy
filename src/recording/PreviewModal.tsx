@@ -56,7 +56,7 @@ export function PreviewModal(props: PreviewModalProps) {
       <div className="modal">
         <header className="modal-head">
           <h2>Your take is ready</h2>
-          <p className="modal-sub">Saved on this device only — nothing was uploaded.</p>
+          <p className="modal-sub">Saved on this device only. Nothing was uploaded.</p>
         </header>
 
         {/* key forces a fresh element per take so stale frames never linger */}
@@ -95,7 +95,7 @@ export function PreviewModal(props: PreviewModalProps) {
                 : saveState === 'saving'
                   ? 'Saving…'
                   : saveState === 'failed'
-                    ? 'Save failed — retry?'
+                    ? 'Save failed. Retry?'
                     : 'Save to library'}
             </button>
           )}

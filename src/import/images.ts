@@ -85,7 +85,7 @@ export async function importImageFiles(files: File[], deps: ImportDeps): Promise
       createdAt: Date.now(),
     });
     if (!stored) {
-      deps.toast('Could not save the image — device storage may be full.');
+      deps.toast('Could not save the image. Device storage may be full.');
       return;
     }
     seedImageBitmap(assetId, bitmap);

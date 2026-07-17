@@ -162,7 +162,7 @@ export function Toolbar(props: ToolbarProps) {
             aria-label="Shapes (R)"
             aria-pressed={props.tool === 'shape'}
             aria-expanded={flyout === 'shape'}
-            title="Shapes (R) — tap again for shape kinds"
+            title="Shapes (R), tap again to pick a shape"
             onClick={(e) => {
               if (props.tool === 'shape') toggleFlyout('shape', e);
               else props.onTool('shape');

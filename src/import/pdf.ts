@@ -124,7 +124,7 @@ export async function importPdf(
         height: canvas.height,
         createdAt: Date.now(),
       });
-      if (!stored) throw new Error('Could not save the page — device storage may be full.');
+      if (!stored) throw new Error('Could not save the page. Device storage may be full.');
       try {
         seedImageBitmap(assetId, await createImageBitmap(canvas));
       } catch {

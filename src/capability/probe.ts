@@ -255,7 +255,7 @@ export async function runCapabilityProbe(): Promise<ProbeResult> {
   if (!window.isSecureContext) {
     return {
       ok: false,
-      reason: 'Recording needs a secure (HTTPS) connection — open the app over https://.',
+      reason: 'Recording needs a secure (HTTPS) connection. Open the app over https://.',
     };
   }
   if (typeof PointerEvent === 'undefined') {
@@ -288,12 +288,12 @@ export async function runCapabilityProbe(): Promise<ProbeResult> {
   }
 
   if (!navigator.mediaDevices) {
-    warnings.push('Camera and microphone are unavailable here — recordings will be silent.');
+    warnings.push('Camera and microphone are unavailable here, so recordings will be silent.');
   }
 
   const storageAdapter: DeviceProfile['storageAdapter'] = idbAvailable() ? 'idb' : 'memory';
   if (storageAdapter === 'memory') {
-    warnings.push('IndexedDB is unavailable — long recordings stay in memory only.');
+    warnings.push('IndexedDB is unavailable, so long recordings stay in memory only.');
   }
 
   let storageEstimate: DeviceProfile['storageEstimate'] = null;
@@ -309,15 +309,15 @@ export async function runCapabilityProbe(): Promise<ProbeResult> {
     // The probe is a simulation — warn and fall back to compatibility mode
     // rather than blocking a recording that may work for real.
     warnings.unshift(
-      'A quick device check could not produce a test recording — recording may not work in this browser, but you can try.',
+      'A quick device check could not produce a test recording. Recording may not work in this browser, but you can try.',
     );
   } else if (!smoke.playable) {
     warnings.push(
-      'The test recording did not play back cleanly — exported files may not play in this browser.',
+      'The test recording did not play back cleanly, so exported files may not play in this browser.',
     );
   }
   if (smoke.ok && !smoke.pauseReliable) {
-    warnings.push('Pause/resume is unreliable in this browser — the pause control is hidden.');
+    warnings.push('Pause/resume is unreliable in this browser, so the pause control is hidden.');
   }
 
   const fastEnough = smoke.ok ? await performanceProbe() : false;

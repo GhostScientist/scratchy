@@ -139,14 +139,14 @@ export const SLIDES: OnboardingSlide[] = [
   {
     id: 'welcome',
     title: 'Welcome to Scribble Party',
-    body: 'A whiteboard studio for teaching — draw, talk, record, and share. Everything stays on this device; nothing is ever uploaded.',
+    body: 'A whiteboard studio for teaching. Draw, talk, record, and share. Everything stays on this device and nothing is ever uploaded.',
     fallback: <WelcomeDemo />,
     mediaLabel: 'Colorful ink dots bouncing in celebration',
   },
   {
     id: 'canvas',
     title: 'An endless canvas',
-    body: 'Pinch to zoom, drag with two fingers to move around. Pen, highlighter, shapes, and text — pressure-aware with palm rejection when you write with a stylus.',
+    body: 'Pinch to zoom, drag with two fingers to move around. Pen, highlighter, shapes, and text. Ink is pressure-aware, with palm rejection when you write with a stylus.',
     video: '/onboarding/canvas.mp4',
     fallback: <CanvasDemo />,
     mediaLabel: 'A pen stroke drawing itself across the board',
@@ -154,7 +154,7 @@ export const SLIDES: OnboardingSlide[] = [
   {
     id: 'camera',
     title: 'Put yourself in the lesson',
-    body: 'Drop a live camera bubble onto the board — with automatic background cutout — and drag it wherever it fits.',
+    body: 'Drop a live camera bubble onto the board and drag it wherever it fits. Your background gets cut out automatically.',
     video: '/onboarding/camera.mp4',
     fallback: <CameraDemo />,
     mediaLabel: 'A camera bubble drifting over the board',
