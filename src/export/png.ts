@@ -3,7 +3,6 @@ import { drawElement, elementBBox, elementVisualPad } from '../lib/elements';
 import { preloadImages } from '../lib/imageCache';
 import type { InkEngine } from '../ink/InkEngine';
 import type { Viewport } from '../ink/Viewport';
-import { STAGE_WIDTH, STAGE_HEIGHT } from '../types';
 import type { BackgroundKind, BoardElement, ViewportState } from '../types';
 
 /** Longest edge of a whole-board export, so huge boards can't OOM a tab. */
@@ -57,9 +56,11 @@ async function renderPng(
   return new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
 }
 
-/** PNG of exactly what the stage shows right now, at 2× (2560×1440). */
+/** PNG of exactly what the stage shows right now, at 2× of the current
+ *  stage window (2560×1440 landscape, 1440×2560 portrait). */
 export function exportViewPng(engine: InkEngine, viewport: Viewport, background: BackgroundKind) {
-  return renderPng(engine.getStrokes(), background, viewport.get(), STAGE_WIDTH, STAGE_HEIGHT, 2);
+  const stage = viewport.getStageSize();
+  return renderPng(engine.getStrokes(), background, viewport.get(), stage.w, stage.h, 2);
 }
 
 /** PNG of all ink with padding, regardless of the current viewport.

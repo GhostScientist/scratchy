@@ -1,7 +1,24 @@
-import type { CameraLayout } from '../types';
+import type { CameraLayout, StageSize } from '../types';
+import { CAMERA_MIN_WIDTH, CAMERA_MAX_WIDTH, cameraAspectFor } from '../types';
 
 export const clamp = (value: number, min: number, max: number): number =>
   Math.min(max, Math.max(min, value));
+
+/** Fit a camera layout back inside a stage window (after rotation): shrink if
+ *  it can no longer fit, then pull it inside the bounds. */
+export function clampCameraLayout(layout: CameraLayout, stage: StageSize): CameraLayout {
+  const aspect = cameraAspectFor(layout.shape);
+  const maxWidth = Math.min(CAMERA_MAX_WIDTH, stage.w - 48, (stage.h - 48) / aspect);
+  const width = Math.round(clamp(layout.width, CAMERA_MIN_WIDTH, Math.max(CAMERA_MIN_WIDTH, maxWidth)));
+  const height = Math.round(width * aspect);
+  return {
+    ...layout,
+    width,
+    height,
+    x: Math.round(clamp(layout.x, 0, Math.max(0, stage.w - width))),
+    y: Math.round(clamp(layout.y, 0, Math.max(0, stage.h - height))),
+  };
+}
 
 export interface CropRect {
   sx: number;

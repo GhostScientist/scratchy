@@ -11,6 +11,9 @@ export default defineConfig({
   use: {
     baseURL: 'http://localhost:5173',
     viewport: { width: 1500, height: 900 },
+    // The display backing scale is DPR-aware; pin the historical 2× so canvas
+    // dimension assertions are deterministic across environments.
+    deviceScaleFactor: 2,
     // Specs start from a fresh origin; mark the first-launch welcome tour as
     // seen so it doesn't cover the app. onboarding.spec.ts opts back out.
     storageState: {

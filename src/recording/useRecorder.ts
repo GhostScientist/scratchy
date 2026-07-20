@@ -7,7 +7,14 @@ import type { RecordingPreset } from './presets';
 import { createRecordingStore } from './RecordingStore';
 import type { RecordingManifest, RecordingStore } from './RecordingStore';
 import { nextId } from '../types';
-import type { Take } from '../types';
+import type { StageSize, Take } from '../types';
+
+/** Everything geometry-dependent a take needs, snapshotted at start() so the
+ *  whole recording is immune to rotations and preset changes mid-take. */
+export interface RecordingSetup {
+  preset: RecordingPreset;
+  stage: StageSize;
+}
 
 export type RecorderPhase = 'idle' | 'countdown' | 'recording' | 'paused' | 'stopping' | 'complete';
 
@@ -33,7 +40,7 @@ const COUNTDOWN_SECONDS = 3;
 export function useRecorder(
   sources: CompositorSources,
   getMicStream: () => MediaStream | null,
-  getPreset: () => RecordingPreset,
+  getRecordingSetup: () => RecordingSetup,
   getSessionMeta: () => { boardId: string | null; title: string },
   onWarning?: (message: string) => void,
 ): RecorderApi {
@@ -47,8 +54,8 @@ export function useRecorder(
   sourcesRef.current = sources;
   const getMicRef = useRef(getMicStream);
   getMicRef.current = getMicStream;
-  const getPresetRef = useRef(getPreset);
-  getPresetRef.current = getPreset;
+  const getSetupRef = useRef(getRecordingSetup);
+  getSetupRef.current = getRecordingSetup;
   const presetRef = useRef<RecordingPreset | null>(null);
 
   const getSessionMetaRef = useRef(getSessionMeta);
@@ -273,12 +280,13 @@ export function useRecorder(
         return current;
       }
       formatRef.current = format;
-      // Fresh compositor per take — its canvas is sized by the preset,
-      // which may have changed since the last recording.
-      const preset = getPresetRef.current();
+      // Fresh compositor per take — its canvas is sized by the preset, and
+      // preset + stage geometry may have changed since the last recording.
+      // This snapshot is the freeze: rotations mid-take can't touch it.
+      const { preset, stage } = getSetupRef.current();
       presetRef.current = preset;
       compositorRef.current?.stop();
-      compositorRef.current = new Compositor(sourcesRef.current, preset);
+      compositorRef.current = new Compositor(sourcesRef.current, preset, stage);
       compositorRef.current.start();
       setCountdownValue(COUNTDOWN_SECONDS);
       let remaining = COUNTDOWN_SECONDS;

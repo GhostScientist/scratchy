@@ -1,10 +1,11 @@
-import { STAGE_WIDTH, STAGE_HEIGHT } from '../types';
-import type { ViewportState } from '../types';
+import type { StageSize, ViewportState } from '../types';
 
 /**
- * Recording presets (SPEC §6.5). The interactive stage stays 1280×720; a
- * preset only changes the compositor's output canvas. Non-16:9 presets
- * record a centered crop of the stage, marked on screen by a frame guide.
+ * Recording presets (SPEC §6.5). A preset only changes the compositor's
+ * output canvas, never the interactive stage. When the stage aspect matches
+ * the preset (landscape stage + 720p/1080p, portrait stage + vertical) the
+ * whole stage is recorded; on a mismatch the preset records a centered crop
+ * of the stage, marked on screen by a frame guide.
  */
 export interface RecordingPreset {
   id: 'compat' | 'quality' | 'vertical';
@@ -65,20 +66,21 @@ export interface OutputCrop {
   scale: number;
 }
 
-/** Centered crop of the 1280×720 stage matching the preset's aspect. */
-export function outputCrop(preset: RecordingPreset): OutputCrop {
-  const stageAspect = STAGE_WIDTH / STAGE_HEIGHT;
+/** Centered crop of the stage matching the preset's aspect. Degenerates to
+ *  the identity region when the stage aspect equals the preset aspect. */
+export function outputCrop(preset: RecordingPreset, stage: StageSize): OutputCrop {
+  const stageAspect = stage.w / stage.h;
   const outAspect = preset.width / preset.height;
-  let w = STAGE_WIDTH;
-  let h = STAGE_HEIGHT;
+  let w = stage.w;
+  let h = stage.h;
   if (outAspect < stageAspect) {
-    w = Math.round(STAGE_HEIGHT * outAspect);
+    w = Math.round(stage.h * outAspect);
   } else if (outAspect > stageAspect) {
-    h = Math.round(STAGE_WIDTH / outAspect);
+    h = Math.round(stage.w / outAspect);
   }
   return {
-    x: Math.round((STAGE_WIDTH - w) / 2),
-    y: Math.round((STAGE_HEIGHT - h) / 2),
+    x: Math.round((stage.w - w) / 2),
+    y: Math.round((stage.h - h) / 2),
     w,
     h,
     scale: preset.height / h,
@@ -87,8 +89,12 @@ export function outputCrop(preset: RecordingPreset): OutputCrop {
 
 /** The viewport whose (0,0)→(outW,outH) render equals the stage crop: every
  *  world-space renderer (background, strokes, laser) works with it verbatim. */
-export function effectiveView(view: ViewportState, preset: RecordingPreset): ViewportState {
-  const crop = outputCrop(preset);
+export function effectiveView(
+  view: ViewportState,
+  preset: RecordingPreset,
+  stage: StageSize,
+): ViewportState {
+  const crop = outputCrop(preset, stage);
   return {
     x: view.x + crop.x / view.zoom,
     y: view.y + crop.y / view.zoom,

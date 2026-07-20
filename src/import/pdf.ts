@@ -1,8 +1,8 @@
 import { putAsset } from '../persistence/assets';
 import { seedImageBitmap } from '../lib/imageCache';
 import { clamp } from '../lib/geometry';
-import { nextId, MIN_ZOOM, MAX_ZOOM, STAGE_WIDTH, STAGE_HEIGHT } from '../types';
-import type { BoardPage, ImageElement } from '../types';
+import { nextId, MIN_ZOOM, MAX_ZOOM, LANDSCAPE_STAGE } from '../types';
+import type { BoardPage, ImageElement, StageSize } from '../types';
 
 /** Rendered page bitmaps are capped to this long edge — crisp at readable
  *  zooms without decoding tens of megapixels per slide. */
@@ -41,17 +41,19 @@ function encodeCanvas(canvas: HTMLCanvasElement): Promise<{ blob: Blob; mime: st
 }
 
 /** One board page per PDF page: the render becomes a locked backdrop element
- *  centered on the stage rect, and the page viewport is preset to frame it. */
-function backdropPage(assetId: string, pixelW: number, pixelH: number): BoardPage {
-  const fit = Math.min(1, STAGE_WIDTH / pixelW, STAGE_HEIGHT / pixelH);
+ *  centered on the stage rect, and the page viewport is preset to frame it.
+ *  Slide placement is stage-relative at import time only — world-space
+ *  thereafter, so later rotations never move imported slides. */
+function backdropPage(assetId: string, pixelW: number, pixelH: number, stage: StageSize): BoardPage {
+  const fit = Math.min(1, stage.w / pixelW, stage.h / pixelH);
   const w = pixelW * fit;
   const h = pixelH * fit;
   const el: ImageElement = {
     kind: 'image',
     id: nextId('im'),
     assetId,
-    x: (STAGE_WIDTH - w) / 2,
-    y: (STAGE_HEIGHT - h) / 2,
+    x: (stage.w - w) / 2,
+    y: (stage.h - h) / 2,
     w,
     h,
     naturalW: pixelW,
@@ -60,7 +62,7 @@ function backdropPage(assetId: string, pixelW: number, pixelH: number): BoardPag
   };
   // Same math as Viewport.fitBBox: open the page showing the whole slide.
   const zoom = clamp(
-    Math.min(STAGE_WIDTH / (w + FIT_PADDING * 2), STAGE_HEIGHT / (h + FIT_PADDING * 2)),
+    Math.min(stage.w / (w + FIT_PADDING * 2), stage.h / (h + FIT_PADDING * 2)),
     MIN_ZOOM,
     MAX_ZOOM,
   );
@@ -68,8 +70,8 @@ function backdropPage(assetId: string, pixelW: number, pixelH: number): BoardPag
     id: nextId('pg'),
     elements: [el],
     viewport: {
-      x: STAGE_WIDTH / 2 - STAGE_WIDTH / (2 * zoom),
-      y: STAGE_HEIGHT / 2 - STAGE_HEIGHT / (2 * zoom),
+      x: stage.w / 2 - stage.w / (2 * zoom),
+      y: stage.h / 2 - stage.h / (2 * zoom),
       zoom,
     },
   };
@@ -83,6 +85,7 @@ function backdropPage(assetId: string, pixelW: number, pixelH: number): BoardPag
 export async function importPdf(
   file: File,
   onProgress: (done: number, total: number) => void,
+  stage: StageSize = LANDSCAPE_STAGE,
 ): Promise<PdfImportResult> {
   // The legacy build supports the browsers this PWA targets (tablets a few
   // years old); the default v6 build needs bleeding-edge JS engine features.
@@ -130,7 +133,7 @@ export async function importPdf(
       } catch {
         // The render cache will decode from the stored blob on demand.
       }
-      pages.push(backdropPage(assetId, canvas.width, canvas.height));
+      pages.push(backdropPage(assetId, canvas.width, canvas.height, stage));
       onProgress(i, count);
     }
     return { pages, totalPages: total };
