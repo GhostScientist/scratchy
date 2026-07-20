@@ -64,6 +64,12 @@ button:disabled {
 .app {
   display: grid;
   grid-template-rows: auto 1fr;
+  /* Cap the single column at the app's own width: a grid's auto track grows
+     to its items' min-content (the topbar's control row wants ~740px), which
+     inflated the whole layout past narrow phone screens and pushed the stage
+     off-screen. minmax(0, 1fr) makes rows fit the screen; the rows manage
+     their own tight-space behavior. */
+  grid-template-columns: minmax(0, 1fr);
   height: 100%;
 }
 
@@ -361,10 +367,19 @@ button:disabled {
   min-height: 0;
 }
 
+/* Reserves the stage's VISUAL (scaled) footprint in layout, so flex
+   centering never handles an overflowing child — WebKit start-aligns those
+   while Chromium overhangs them evenly. Sized inline from stageSize×scale. */
+.stage-scale-box {
+  flex: 0 0 auto;
+}
+
 /* Logical width/height (1280×720 or 720×1280) are set inline from the
-   stage-size state; the CSS transform scales the whole thing to fit. */
+   stage-size state; the CSS transform scales it down into the scale box,
+   from the box's top-left corner. */
 .stage {
   position: relative;
+  transform-origin: 0 0;
   flex: 0 0 auto;
   border-radius: 6px;
   overflow: hidden;
@@ -1651,11 +1666,13 @@ button:disabled {
 
 /* ---- toasts ---------------------------------------------------------------------- */
 
+/* Full-width strip with centered items — anchoring at left:50% would cap
+   shrink-to-fit width at half the viewport and wrap toasts on phones. */
 .toasts {
   position: fixed;
   bottom: 22px;
-  left: 50%;
-  transform: translateX(-50%);
+  left: 0;
+  right: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -1852,6 +1869,59 @@ button:disabled {
    indicators and notches. Handedness is a no-op here (the bar is full
    width), so the hand-left variants collapse into the same layout. */
 @media (orientation: portrait) and (max-width: 700px) {
+  /* Compact top bar: every control the phone needs, none it doesn't. The
+     row must fit the screen width — its popovers (settings, stop-confirm)
+     hang below it, so it cannot become a scroll container. */
+  .topbar {
+    gap: 6px;
+    padding: 0 8px;
+  }
+
+  .brand {
+    display: none;
+  }
+
+  .title-input {
+    flex: 1 1 80px;
+    min-width: 40px;
+    padding: 0 6px;
+  }
+
+  .top-actions {
+    gap: 4px;
+  }
+
+  .pill {
+    min-width: 40px;
+    padding: 0 6px;
+  }
+
+  /* The mic level meter is sub-pixel noise at this size. */
+  .pill .level {
+    display: none;
+  }
+
+  .record-btn {
+    padding: 0 10px;
+    gap: 6px;
+  }
+
+  /* Import and PNG export are desktop niceties — drag-drop and paste still
+     import, and takes download from the preview/library. */
+  .import-pill,
+  .export-menu {
+    display: none;
+  }
+
+  /* While recording, clear space for the timer + pause/stop cluster; the
+     title, board switcher, and takes library are all locked or pointless
+     mid-take anyway. */
+  .topbar.is-recording .title-input,
+  .topbar.is-recording .boards-menu,
+  .topbar.is-recording .library-pill {
+    display: none;
+  }
+
   .app .rail-wrap,
   .app.hand-left .rail-wrap {
     left: 0;
@@ -1886,8 +1956,17 @@ button:disabled {
     margin: 0 4px;
   }
 
+  /* Slightly narrower buttons so more tools fit before the row scrolls;
+     height (≥44px via the base rule) keeps the touch target. */
+  .rail-btn {
+    width: 42px;
+  }
+
+  /* Collapsing a bottom bar saves almost nothing, and the chevron is the
+     button that ends up half-clipped at the screen edge. Recording still
+     auto-collapses to the floating handle, which re-expands on tap. */
   .rail-collapse {
-    margin-top: 0;
+    display: none;
   }
 
   /* Flyouts open upward from the bar, centered above it — the vertical

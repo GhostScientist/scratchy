@@ -91,14 +91,53 @@ test.describe('portrait phone', () => {
     expect(canvas).toEqual({ w: 1440, h: 2560 });
   });
 
+  test('the stage is centered on-screen and its layout box matches its visual box', async ({
+    page,
+  }) => {
+    await seed(page);
+    await openApp(page);
+    const box = await page.locator('.stage').boundingBox();
+    if (!box) throw new Error('stage not found');
+    // Fully on-screen and horizontally centered — regression guard for the
+    // iOS Safari clipping bug (WebKit start-aligns overflowing centered flex
+    // items, so the stage was pushed right and cut off).
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width).toBeLessThanOrEqual(PHONE.width);
+    expect(Math.abs(box.x + box.width / 2 - PHONE.width / 2)).toBeLessThanOrEqual(12);
+    // The engine-independent invariant behind the fix: the scale box's LAYOUT
+    // size equals the stage's VISUAL (transformed) size, so flex centering
+    // never sees an overflowing child on any engine.
+    const layout = await page.locator('.stage-scale-box').evaluate((el) => ({
+      w: (el as HTMLElement).offsetWidth,
+      h: (el as HTMLElement).offsetHeight,
+    }));
+    expect(Math.abs(layout.w - box.width)).toBeLessThanOrEqual(1);
+    expect(Math.abs(layout.h - box.height)).toBeLessThanOrEqual(1);
+
+    // Nothing may widen the page (the topbar's min-content once inflated the
+    // whole grid to ~740px), and the primary action stays reachable.
+    const scrollWidth = await page.evaluate(() => document.documentElement.scrollWidth);
+    expect(scrollWidth).toBeLessThanOrEqual(PHONE.width);
+    const record = await page.getByRole('button', { name: 'Record' }).boundingBox();
+    if (!record) throw new Error('record button not found');
+    expect(record.x + record.width).toBeLessThanOrEqual(PHONE.width);
+  });
+
   test('the tool rail becomes a bottom bar and the side gutter is reclaimed', async ({ page }) => {
     await seed(page);
     await openApp(page);
     const rail = await page.locator('.rail').boundingBox();
     if (!rail) throw new Error('rail not found');
-    // Bottom bar: sits in the lower fifth of the screen, wider than tall.
+    // Bottom bar: sits in the lower fifth of the screen, wider than tall,
+    // and never wider than the screen.
     expect(rail.y).toBeGreaterThan(PHONE.height * 0.8);
     expect(rail.width).toBeGreaterThan(rail.height);
+    expect(rail.x).toBeGreaterThanOrEqual(0);
+    expect(rail.x + rail.width).toBeLessThanOrEqual(PHONE.width);
+
+    // The collapse chevron is dropped from the bottom bar (it was the button
+    // left half-clipped at the screen edge).
+    await expect(page.locator('.rail-collapse')).toBeHidden();
 
     const fit = await page.locator('.stage-fit').boundingBox();
     if (!fit) throw new Error('stage-fit not found');

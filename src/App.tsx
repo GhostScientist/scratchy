@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { StageCanvas } from './ink/StageCanvas';
 import type { InkEngine, SelectionInfo, TextEditRequest } from './ink/InkEngine';
 import { TextEditorOverlay } from './ui/TextEditorOverlay';
@@ -800,7 +800,10 @@ export default function App() {
 
   // ---- stage scaling -----------------------------------------------------------
 
-  useEffect(() => {
+  // Layout effect: the first paint must already be scaled — the stage's
+  // wrapper takes its layout size from the scale, and a one-frame flash of
+  // an unscaled 720/1280px box would visibly jump.
+  useLayoutEffect(() => {
     const el = fitRef.current;
     if (!el) return;
     const update = (w: number, h: number) => {
@@ -1410,14 +1413,23 @@ export default function App() {
         }}
       >
         <div className="stage-fit" ref={fitRef}>
+          {/* The scale box's LAYOUT size is the stage's visual size, so flex
+              centering never sees an overflowing child. WebKit start-aligns
+              overflowing centered flex items (Chromium overhangs them evenly),
+              so centering a transform-scaled 720/1280px box directly is
+              engine-dependent — this wrapper makes it deterministic. */}
           <div
-            className={stageClasses}
-            style={{
-              width: stageSize.w,
-              height: stageSize.h,
-              transform: `scale(${scale})`,
-            }}
+            className="stage-scale-box"
+            style={{ width: stageSize.w * scale, height: stageSize.h * scale }}
           >
+            <div
+              className={stageClasses}
+              style={{
+                width: stageSize.w,
+                height: stageSize.h,
+                transform: `scale(${scale})`,
+              }}
+            >
             <StageCanvas
               background={background}
               tool={tool}
@@ -1494,6 +1506,7 @@ export default function App() {
             {recorder.phase === 'countdown' && (
               <Countdown value={recorder.countdownValue} onCancel={recorder.cancelCountdown} />
             )}
+            </div>
           </div>
         </div>
 
