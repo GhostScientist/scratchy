@@ -152,6 +152,10 @@ export interface Take {
   extension: string;
   durationMs: number;
   createdAt: number;
+  /** True when the blob has been remuxed into a seekable container with a
+   *  real duration (recording/remux.ts). Absent/false = raw MediaRecorder
+   *  bytes, healed lazily when opened from the library. */
+  seekable?: boolean;
 }
 
 export const CAMERA_MIN_WIDTH = 140;

@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { StoredTake } from '../persistence/boards';
+import { saveTake } from '../persistence/boards';
+import { remuxForDelivery } from '../recording/remux';
 import { formatDuration } from './TopBar';
 import { CloseIcon, DownloadIcon, TrashIcon } from './icons';
 
@@ -26,34 +28,65 @@ function stamp(createdAt: number): string {
 
 /** One take row; the blob only becomes an object URL while expanded. */
 function TakeRow({ take, onDelete }: { take: StoredTake; onDelete(): void }) {
-  const [url, setUrl] = useState<string | null>(null);
+  const [open, setOpen] = useState(false);
+  const [media, setMedia] = useState<{ url: string; filename: string } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   useEffect(() => {
-    if (!url) return;
-    return () => URL.revokeObjectURL(url);
-  }, [url]);
-
-  const filename = `${take.title || 'take'}${take.extension}`;
+    if (!open) {
+      setMedia(null);
+      return;
+    }
+    let cancelled = false;
+    let url: string | null = null;
+    void (async () => {
+      let blob = take.blob;
+      let extension = take.extension;
+      // Takes stored before the seekable-remux fix are raw MediaRecorder
+      // streams (no duration, "Live Broadcast" in Apple players). Heal them
+      // once on first open — a lossless rewrite — and persist the fix.
+      if (!take.seekable) {
+        const fixed = await remuxForDelivery(blob);
+        if (fixed) {
+          blob = fixed.blob;
+          extension = fixed.extension;
+          void saveTake({
+            ...take,
+            blob: fixed.blob,
+            mimeType: fixed.mimeType,
+            extension: fixed.extension,
+            seekable: true,
+          });
+        }
+      }
+      if (cancelled) return;
+      url = URL.createObjectURL(blob);
+      setMedia({ url, filename: `${take.title || 'take'}${extension}` });
+    })();
+    return () => {
+      cancelled = true;
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [open, take]);
 
   return (
     <div className="take-row">
       <button
         type="button"
         className="take-open"
-        aria-expanded={url !== null}
-        onClick={() => setUrl((u) => (u ? null : URL.createObjectURL(take.blob)))}
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
       >
         <span className="take-title">{take.title || 'Untitled take'}</span>
         <span className="take-meta">
           {stamp(take.createdAt)} · {formatDuration(take.durationMs)} · {mb(take.blob.size)} MB
         </span>
       </button>
-      {url && (
+      {media && (
         <>
-          <video className="take-video" src={url} controls playsInline />
+          <video className="take-video" src={media.url} controls playsInline />
           <div className="take-actions">
-            <a className="btn ghost small" href={url} download={filename}>
+            <a className="btn ghost small" href={media.url} download={media.filename}>
               <DownloadIcon />
               Download
             </a>

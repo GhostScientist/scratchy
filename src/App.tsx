@@ -52,6 +52,7 @@ import { ensureDeviceProfile } from './capability/probe';
 import { loadDeviceProfile } from './capability/profile';
 import type { DeviceProfile } from './capability/profile';
 import { presetById, outputCrop } from './recording/presets';
+import { remuxForDelivery } from './recording/remux';
 import { recoverSessions, assembleSession, deleteSessionById } from './recording/RecordingStore';
 import type { RecoverableSession } from './recording/RecordingStore';
 import { RecoveryCard } from './ui/RecoveryCard';
@@ -868,14 +869,23 @@ export default function App() {
         void deleteSessionById(session.manifest.sessionId);
         return;
       }
+      // Recovered chunks are a raw streaming container — rewrite into a
+      // seekable file like a normal take; fall back to the raw bytes.
+      const fixed = await remuxForDelivery(blob);
+      const delivered = fixed ?? {
+        blob,
+        mimeType: session.manifest.mimeType,
+        extension: session.manifest.extension,
+      };
       setRecovered({
         take: {
-          blob,
-          url: URL.createObjectURL(blob),
-          mimeType: session.manifest.mimeType,
-          extension: session.manifest.extension,
+          blob: delivered.blob,
+          url: URL.createObjectURL(delivered.blob),
+          mimeType: delivered.mimeType,
+          extension: delivered.extension,
           durationMs: session.manifest.activeMs,
           createdAt: session.manifest.startedAt,
+          seekable: fixed !== null,
         },
         sessionId: session.manifest.sessionId,
         boardId: session.manifest.boardId,
@@ -916,6 +926,7 @@ export default function App() {
       extension: recovered.take.extension,
       durationMs: recovered.take.durationMs,
       createdAt: recovered.take.createdAt,
+      seekable: recovered.take.seekable,
     });
   }, [recovered]);
 
@@ -932,6 +943,7 @@ export default function App() {
       extension: recorderTake.extension,
       durationMs: recorderTake.durationMs,
       createdAt: recorderTake.createdAt,
+      seekable: recorderTake.seekable,
     });
   }, [recorderTake]);
 

@@ -3,6 +3,7 @@ import { Compositor } from './Compositor';
 import type { CompositorSources } from './Compositor';
 import { negotiateFormat, extensionFor } from './mime';
 import type { NegotiatedFormat } from './mime';
+import { remuxForDelivery } from './remux';
 import type { RecordingPreset } from './presets';
 import { createRecordingStore } from './RecordingStore';
 import type { RecordingManifest, RecordingStore } from './RecordingStore';
@@ -155,13 +156,24 @@ export function useRecorder(
         return;
       }
       completedSessionRef.current = sessionId;
+      // MediaRecorder's raw output is a duration-less streaming container
+      // ("Live Broadcast" in Apple players); rewrite it into a seekable file.
+      // On failure the raw bytes are delivered as before — never lose a take.
+      const fixed = await remuxForDelivery(blob);
+      if (!fixed) {
+        warnRef.current?.(
+          'This take was saved as recorded, but other apps may not show its duration correctly.',
+        );
+      }
+      const delivered = fixed ?? { blob, mimeType, extension: extensionFor(mimeType) };
       const newTake: Take = {
-        blob,
-        url: URL.createObjectURL(blob),
-        mimeType,
-        extension: extensionFor(mimeType),
+        blob: delivered.blob,
+        url: URL.createObjectURL(delivered.blob),
+        mimeType: delivered.mimeType,
+        extension: delivered.extension,
         durationMs: stoppedElapsedRef.current,
         createdAt: Date.now(),
+        seekable: fixed !== null,
       };
       setTake(newTake);
       setPhase('complete');

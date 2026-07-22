@@ -67,6 +67,9 @@ export interface StoredTake {
   extension: string;
   durationMs: number;
   createdAt: number;
+  /** True once the blob is a seekable container (see recording/remux.ts).
+   *  Takes stored before the remux fix lack it and are healed on open. */
+  seekable?: boolean;
 }
 
 const ACTIVE_KEY = 'activeBoardId';
