@@ -37,6 +37,10 @@ export interface RecorderApi {
 }
 
 const COUNTDOWN_SECONDS = 3;
+/** If no bytes arrive within this many ms of starting (≥4 timeslices), the
+ *  negotiated format claims support but records nothing here — retry with
+ *  the next candidate instead of dooming the take. */
+const FIRST_DATA_TIMEOUT_MS = 4500;
 
 export function useRecorder(
   sources: CompositorSources,
@@ -87,6 +91,11 @@ export function useRecorder(
   const stoppedElapsedRef = useRef(0);
   const timerRef = useRef(0);
   const countdownTimerRef = useRef(0);
+  const firstChunkTimerRef = useRef(0);
+  /** Formats that negotiated but produced no data — excluded on retry. */
+  const formatBlacklistRef = useRef<Set<string>>(new Set());
+  /** Late-bound so beginRecording and the failover can reference each other. */
+  const failoverRef = useRef<() => boolean>(() => false);
   const failedRef = useRef(false);
   const finalizedRef = useRef(false);
   const watchdogRef = useRef(0);
@@ -118,6 +127,7 @@ export function useRecorder(
   const teardownCapture = useCallback(() => {
     window.clearInterval(timerRef.current);
     window.clearTimeout(watchdogRef.current);
+    window.clearTimeout(firstChunkTimerRef.current);
     compositorRef.current?.stop();
     // The recorder stream owns its tracks (mic tracks are clones), so end
     // them all — ending every track is what makes the encoder flush.
@@ -248,6 +258,8 @@ export function useRecorder(
 
       recorder.ondataavailable = (e: BlobEvent) => {
         if (!e.data || e.data.size === 0) return;
+        // Real bytes arrived — the format works; disarm the failover.
+        window.clearTimeout(firstChunkTimerRef.current);
         const index = chunkIndexRef.current;
         chunkIndexRef.current += 1;
         appendChainRef.current = appendChainRef.current.then(async () => {
@@ -262,11 +274,28 @@ export function useRecorder(
         });
       };
       recorder.onerror = () => {
+        // An encoder that dies before producing anything is the same story
+        // as one that silently records nothing — try the next format.
+        if (chunkIndexRef.current === 0 && failoverRef.current()) return;
         failRecording('Recording failed, the browser reported an encoder error. Your lesson is safe.');
       };
       recorder.onstop = finalize;
       recorderRef.current = recorder;
       recorder.start(1000);
+      // Some browsers (notably Safari builds with webm) accept a format in
+      // isTypeSupported yet never deliver a byte on canvas streams. Nothing
+      // has been captured yet, so restarting with the next candidate loses
+      // no content.
+      window.clearTimeout(firstChunkTimerRef.current);
+      firstChunkTimerRef.current = window.setTimeout(() => {
+        if (chunkIndexRef.current > 0) return;
+        if (recorderRef.current?.state !== 'recording') return;
+        if (!failoverRef.current()) {
+          failRecording(
+            'The recording produced no data. This browser may not support canvas recording.',
+          );
+        }
+      }, FIRST_DATA_TIMEOUT_MS);
       activeMsRef.current = 0;
       segmentStartRef.current = performance.now();
       segmentOpenRef.current = true;
@@ -280,6 +309,46 @@ export function useRecorder(
       failRecording(`Could not start recording: ${message}. Your lesson is safe.`);
     }
   }, [currentActiveMs, failRecording, finalize]);
+
+  /** Blacklist the format that recorded nothing and restart with the next
+   *  candidate. The compositor keeps rendering; only the dead recorder, its
+   *  stream, and the empty recovery session are dropped. Returns false when
+   *  no alternative format exists (caller falls through to a hard error). */
+  const attemptFormatFailover = useCallback((): boolean => {
+    const failed = formatRef.current;
+    if (!failed) return false;
+    formatBlacklistRef.current.add(failed.mimeType);
+    const next = negotiateFormat(formatBlacklistRef.current);
+    if (!next) return false;
+    window.clearInterval(timerRef.current);
+    window.clearTimeout(firstChunkTimerRef.current);
+    const recorder = recorderRef.current;
+    if (recorder) {
+      recorder.ondataavailable = null;
+      recorder.onerror = null;
+      recorder.onstop = null;
+      try {
+        recorder.stop();
+      } catch {
+        // Already dead — that's why we're here.
+      }
+    }
+    recorderRef.current = null;
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    streamRef.current = null;
+    const store = storeRef.current;
+    const emptySessionId = sessionIdRef.current;
+    if (store && emptySessionId) {
+      appendChainRef.current = appendChainRef.current.then(() => store.deleteSession(emptySessionId));
+    }
+    sessionIdRef.current = null;
+    manifestRef.current = null;
+    formatRef.current = next;
+    warnRef.current?.('Restarted the recording in a compatible format.');
+    beginRecording();
+    return true;
+  }, [beginRecording]);
+  failoverRef.current = attemptFormatFailover;
 
   const start = useCallback(() => {
     setPhase((current) => {
