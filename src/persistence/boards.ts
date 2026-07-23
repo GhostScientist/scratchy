@@ -221,7 +221,7 @@ export async function createBoard(): Promise<SavedBoard | null> {
 export async function deleteBoard(id: string): Promise<void> {
   try {
     await idbDelete(STORE_BOARDS, id);
-    const takes = await idbGetAll<StoredTake>(STORE_TAKES);
+    const takes = await idbGetAll<{ id: string; boardId: string }>(STORE_TAKES);
     for (const take of takes) {
       if (take.boardId === id) await idbDelete(STORE_TAKES, take.id);
     }
@@ -241,19 +241,43 @@ export async function setActiveBoard(id: string): Promise<void> {
 
 // ---- takes ---------------------------------------------------------------
 
+/** On-disk shape: exactly one of `blob` (normal) or `bytes` (fallback for
+ *  browsers — notably some iOS Safari versions — whose IndexedDB fails to
+ *  structured-clone Blob values while storing ArrayBuffers just fine). */
+type StoredTakeRow = Omit<StoredTake, 'blob'> & { blob?: Blob; bytes?: ArrayBuffer };
+
+function rowToTake(row: StoredTakeRow): StoredTake {
+  if (row.blob) return row as StoredTake;
+  const { bytes, ...rest } = row;
+  return { ...rest, blob: new Blob([bytes ?? new ArrayBuffer(0)], { type: row.mimeType }) };
+}
+
 export async function saveTake(take: StoredTake): Promise<boolean> {
   try {
     await idbPut(STORE_TAKES, take);
     return true;
-  } catch {
-    return false;
+  } catch (blobError) {
+    // Blob storage failed — retry with the raw bytes, which every engine
+    // can clone. The blob is rebuilt from them on read.
+    try {
+      const { blob, ...rest } = take;
+      const row: StoredTakeRow = { ...rest, bytes: await blob.arrayBuffer() };
+      await idbPut(STORE_TAKES, row);
+      return true;
+    } catch (bytesError) {
+      console.error('saveTake failed for blob and bytes storage', blobError, bytesError);
+      return false;
+    }
   }
 }
 
 export async function listTakes(boardId: string): Promise<StoredTake[]> {
   try {
-    const all = await idbGetAll<StoredTake>(STORE_TAKES);
-    return all.filter((t) => t.boardId === boardId).sort((a, b) => b.createdAt - a.createdAt);
+    const all = await idbGetAll<StoredTakeRow>(STORE_TAKES);
+    return all
+      .filter((t) => t.boardId === boardId)
+      .map(rowToTake)
+      .sort((a, b) => b.createdAt - a.createdAt);
   } catch {
     return [];
   }

@@ -154,3 +154,38 @@ test('library takes play seekable, and legacy raw takes are healed on open', asy
   });
   expect(await healed.jsonValue()).toBe(true);
 });
+
+test('saving falls back to raw bytes when IndexedDB rejects Blob values', async ({ page }) => {
+  test.setTimeout(90_000);
+  await seed(page);
+  // Simulate the iOS Safari failure: IndexedDB refuses to store objects
+  // holding a Blob (take rows only — chunk/board writes must keep working).
+  await page.addInitScript(() => {
+    const origPut = IDBObjectStore.prototype.put;
+    IDBObjectStore.prototype.put = function (value: any, key?: IDBValidKey) {
+      if (value && typeof value === 'object' && 'boardId' in value && value.blob instanceof Blob) {
+        throw new DOMException('simulated Safari Blob clone failure', 'DataCloneError');
+      }
+      return key === undefined ? origPut.call(this, value) : origPut.call(this, value, key);
+    };
+  });
+  await recordTake(page, 2);
+
+  await page.getByRole('button', { name: 'Save to library' }).click();
+  await expect(page.getByRole('button', { name: 'Saved to library ✓' })).toBeVisible({
+    timeout: 10_000,
+  });
+  await page.getByRole('button', { name: 'Back to board' }).click();
+  await expect(page.locator('.modal-scrim')).toBeHidden({ timeout: 10_000 });
+
+  // The bytes-stored take reads back as a playable, seekable video.
+  await page.getByRole('button', { name: 'Saved takes' }).click();
+  await page.locator('.take-open').first().click();
+  await expect(page.locator('.take-video')).toBeVisible({ timeout: 15_000 });
+  const info = await inspectVideo(page, '.take-video');
+  expect(info.finite).toBe(true);
+  expect(info.duration).toBeGreaterThan(1);
+  // A static canvas compresses to almost nothing — just prove real bytes
+  // round-tripped through the bytes-fallback storage.
+  expect(info.size).toBeGreaterThan(1000);
+});
