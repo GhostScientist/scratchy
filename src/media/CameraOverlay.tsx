@@ -1,13 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { clamp, cameraCornerRadius } from '../lib/geometry';
-import {
-  STAGE_WIDTH,
-  STAGE_HEIGHT,
-  CAMERA_MIN_WIDTH,
-  CAMERA_MAX_WIDTH,
-  cameraAspectFor,
-} from '../types';
-import type { CameraLayout, CameraShape } from '../types';
+import { CAMERA_MIN_WIDTH, CAMERA_MAX_WIDTH, cameraAspectFor } from '../types';
+import type { CameraLayout, CameraShape, StageSize } from '../types';
 import type { CutoutState } from './cutout';
 import {
   ShapeCircleIcon,
@@ -20,6 +14,8 @@ import {
 
 interface CameraOverlayProps {
   stream: MediaStream;
+  /** Current stage window — drag/resize clamps stay inside it. */
+  stage: StageSize;
   layout: CameraLayout;
   /** Live layout read by the compositor every frame (updated during drags). */
   layoutRef: { current: CameraLayout };
@@ -117,18 +113,19 @@ export function CameraOverlay(props: CameraOverlayProps) {
     if (!g || e.pointerId !== g.pointerId) return;
     e.preventDefault();
     const s = props.scaleRef.current || 1;
+    const stage = props.stage;
     const dx = (e.clientX - g.startX) / s;
     const dy = (e.clientY - g.startY) / s;
     if (g.kind === 'move') {
       applyLayout({
         ...g.start,
-        x: Math.round(clamp(g.start.x + dx, 0, STAGE_WIDTH - g.start.width)),
-        y: Math.round(clamp(g.start.y + dy, 0, STAGE_HEIGHT - g.start.height)),
+        x: Math.round(clamp(g.start.x + dx, 0, stage.w - g.start.width)),
+        y: Math.round(clamp(g.start.y + dy, 0, stage.h - g.start.height)),
       });
     } else {
       const aspect = cameraAspectFor(g.start.shape);
       let width = clamp(g.start.width + dx, CAMERA_MIN_WIDTH, CAMERA_MAX_WIDTH);
-      width = Math.min(width, STAGE_WIDTH - g.start.x, (STAGE_HEIGHT - g.start.y) / aspect);
+      width = Math.min(width, stage.w - g.start.x, (stage.h - g.start.y) / aspect);
       applyLayout({
         ...g.start,
         width: Math.round(width),
@@ -158,7 +155,7 @@ export function CameraOverlay(props: CameraOverlayProps) {
   );
 
   const { layout, recording } = props;
-  const controlsBelow = layout.y + layout.height + 60 <= STAGE_HEIGHT;
+  const controlsBelow = layout.y + layout.height + 60 <= props.stage.h;
   const cutoutLive = layout.shape === 'cutout' && props.cutoutState === 'ready';
   const cutoutLoading = layout.shape === 'cutout' && props.cutoutState === 'loading';
 

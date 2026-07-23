@@ -3,11 +3,19 @@ import { Compositor } from './Compositor';
 import type { CompositorSources } from './Compositor';
 import { negotiateFormat, extensionFor } from './mime';
 import type { NegotiatedFormat } from './mime';
+import { remuxForDelivery } from './remux';
 import type { RecordingPreset } from './presets';
 import { createRecordingStore } from './RecordingStore';
 import type { RecordingManifest, RecordingStore } from './RecordingStore';
 import { nextId } from '../types';
-import type { Take } from '../types';
+import type { StageSize, Take } from '../types';
+
+/** Everything geometry-dependent a take needs, snapshotted at start() so the
+ *  whole recording is immune to rotations and preset changes mid-take. */
+export interface RecordingSetup {
+  preset: RecordingPreset;
+  stage: StageSize;
+}
 
 export type RecorderPhase = 'idle' | 'countdown' | 'recording' | 'paused' | 'stopping' | 'complete';
 
@@ -29,11 +37,15 @@ export interface RecorderApi {
 }
 
 const COUNTDOWN_SECONDS = 3;
+/** If no bytes arrive within this many ms of starting (≥4 timeslices), the
+ *  negotiated format claims support but records nothing here — retry with
+ *  the next candidate instead of dooming the take. */
+const FIRST_DATA_TIMEOUT_MS = 4500;
 
 export function useRecorder(
   sources: CompositorSources,
   getMicStream: () => MediaStream | null,
-  getPreset: () => RecordingPreset,
+  getRecordingSetup: () => RecordingSetup,
   getSessionMeta: () => { boardId: string | null; title: string },
   onWarning?: (message: string) => void,
 ): RecorderApi {
@@ -47,8 +59,8 @@ export function useRecorder(
   sourcesRef.current = sources;
   const getMicRef = useRef(getMicStream);
   getMicRef.current = getMicStream;
-  const getPresetRef = useRef(getPreset);
-  getPresetRef.current = getPreset;
+  const getSetupRef = useRef(getRecordingSetup);
+  getSetupRef.current = getRecordingSetup;
   const presetRef = useRef<RecordingPreset | null>(null);
 
   const getSessionMetaRef = useRef(getSessionMeta);
@@ -79,6 +91,11 @@ export function useRecorder(
   const stoppedElapsedRef = useRef(0);
   const timerRef = useRef(0);
   const countdownTimerRef = useRef(0);
+  const firstChunkTimerRef = useRef(0);
+  /** Formats that negotiated but produced no data — excluded on retry. */
+  const formatBlacklistRef = useRef<Set<string>>(new Set());
+  /** Late-bound so beginRecording and the failover can reference each other. */
+  const failoverRef = useRef<() => boolean>(() => false);
   const failedRef = useRef(false);
   const finalizedRef = useRef(false);
   const watchdogRef = useRef(0);
@@ -110,6 +127,7 @@ export function useRecorder(
   const teardownCapture = useCallback(() => {
     window.clearInterval(timerRef.current);
     window.clearTimeout(watchdogRef.current);
+    window.clearTimeout(firstChunkTimerRef.current);
     compositorRef.current?.stop();
     // The recorder stream owns its tracks (mic tracks are clones), so end
     // them all — ending every track is what makes the encoder flush.
@@ -148,13 +166,24 @@ export function useRecorder(
         return;
       }
       completedSessionRef.current = sessionId;
+      // MediaRecorder's raw output is a duration-less streaming container
+      // ("Live Broadcast" in Apple players); rewrite it into a seekable file.
+      // On failure the raw bytes are delivered as before — never lose a take.
+      const fixed = await remuxForDelivery(blob);
+      if (!fixed) {
+        warnRef.current?.(
+          'This take was saved as recorded, but other apps may not show its duration correctly.',
+        );
+      }
+      const delivered = fixed ?? { blob, mimeType, extension: extensionFor(mimeType) };
       const newTake: Take = {
-        blob,
-        url: URL.createObjectURL(blob),
-        mimeType,
-        extension: extensionFor(mimeType),
+        blob: delivered.blob,
+        url: URL.createObjectURL(delivered.blob),
+        mimeType: delivered.mimeType,
+        extension: delivered.extension,
         durationMs: stoppedElapsedRef.current,
         createdAt: Date.now(),
+        seekable: fixed !== null,
       };
       setTake(newTake);
       setPhase('complete');
@@ -229,6 +258,8 @@ export function useRecorder(
 
       recorder.ondataavailable = (e: BlobEvent) => {
         if (!e.data || e.data.size === 0) return;
+        // Real bytes arrived — the format works; disarm the failover.
+        window.clearTimeout(firstChunkTimerRef.current);
         const index = chunkIndexRef.current;
         chunkIndexRef.current += 1;
         appendChainRef.current = appendChainRef.current.then(async () => {
@@ -243,11 +274,28 @@ export function useRecorder(
         });
       };
       recorder.onerror = () => {
+        // An encoder that dies before producing anything is the same story
+        // as one that silently records nothing — try the next format.
+        if (chunkIndexRef.current === 0 && failoverRef.current()) return;
         failRecording('Recording failed, the browser reported an encoder error. Your lesson is safe.');
       };
       recorder.onstop = finalize;
       recorderRef.current = recorder;
       recorder.start(1000);
+      // Some browsers (notably Safari builds with webm) accept a format in
+      // isTypeSupported yet never deliver a byte on canvas streams. Nothing
+      // has been captured yet, so restarting with the next candidate loses
+      // no content.
+      window.clearTimeout(firstChunkTimerRef.current);
+      firstChunkTimerRef.current = window.setTimeout(() => {
+        if (chunkIndexRef.current > 0) return;
+        if (recorderRef.current?.state !== 'recording') return;
+        if (!failoverRef.current()) {
+          failRecording(
+            'The recording produced no data. This browser may not support canvas recording.',
+          );
+        }
+      }, FIRST_DATA_TIMEOUT_MS);
       activeMsRef.current = 0;
       segmentStartRef.current = performance.now();
       segmentOpenRef.current = true;
@@ -262,6 +310,46 @@ export function useRecorder(
     }
   }, [currentActiveMs, failRecording, finalize]);
 
+  /** Blacklist the format that recorded nothing and restart with the next
+   *  candidate. The compositor keeps rendering; only the dead recorder, its
+   *  stream, and the empty recovery session are dropped. Returns false when
+   *  no alternative format exists (caller falls through to a hard error). */
+  const attemptFormatFailover = useCallback((): boolean => {
+    const failed = formatRef.current;
+    if (!failed) return false;
+    formatBlacklistRef.current.add(failed.mimeType);
+    const next = negotiateFormat(formatBlacklistRef.current);
+    if (!next) return false;
+    window.clearInterval(timerRef.current);
+    window.clearTimeout(firstChunkTimerRef.current);
+    const recorder = recorderRef.current;
+    if (recorder) {
+      recorder.ondataavailable = null;
+      recorder.onerror = null;
+      recorder.onstop = null;
+      try {
+        recorder.stop();
+      } catch {
+        // Already dead — that's why we're here.
+      }
+    }
+    recorderRef.current = null;
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    streamRef.current = null;
+    const store = storeRef.current;
+    const emptySessionId = sessionIdRef.current;
+    if (store && emptySessionId) {
+      appendChainRef.current = appendChainRef.current.then(() => store.deleteSession(emptySessionId));
+    }
+    sessionIdRef.current = null;
+    manifestRef.current = null;
+    formatRef.current = next;
+    warnRef.current?.('Restarted the recording in a compatible format.');
+    beginRecording();
+    return true;
+  }, [beginRecording]);
+  failoverRef.current = attemptFormatFailover;
+
   const start = useCallback(() => {
     setPhase((current) => {
       if (current !== 'idle') return current;
@@ -273,12 +361,13 @@ export function useRecorder(
         return current;
       }
       formatRef.current = format;
-      // Fresh compositor per take — its canvas is sized by the preset,
-      // which may have changed since the last recording.
-      const preset = getPresetRef.current();
+      // Fresh compositor per take — its canvas is sized by the preset, and
+      // preset + stage geometry may have changed since the last recording.
+      // This snapshot is the freeze: rotations mid-take can't touch it.
+      const { preset, stage } = getSetupRef.current();
       presetRef.current = preset;
       compositorRef.current?.stop();
-      compositorRef.current = new Compositor(sourcesRef.current, preset);
+      compositorRef.current = new Compositor(sourcesRef.current, preset, stage);
       compositorRef.current.start();
       setCountdownValue(COUNTDOWN_SECONDS);
       let remaining = COUNTDOWN_SECONDS;

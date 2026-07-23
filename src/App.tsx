@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { StageCanvas } from './ink/StageCanvas';
 import type { InkEngine, SelectionInfo, TextEditRequest } from './ink/InkEngine';
 import { TextEditorOverlay } from './ui/TextEditorOverlay';
@@ -52,20 +52,23 @@ import { ensureDeviceProfile } from './capability/probe';
 import { loadDeviceProfile } from './capability/profile';
 import type { DeviceProfile } from './capability/profile';
 import { presetById, outputCrop } from './recording/presets';
+import { remuxForDelivery } from './recording/remux';
 import { recoverSessions, assembleSession, deleteSessionById } from './recording/RecordingStore';
 import type { RecoverableSession } from './recording/RecordingStore';
 import { RecoveryCard } from './ui/RecoveryCard';
 import type { Take } from './types';
 import { exportViewPng, exportBoardPng, downloadBlob } from './export/png';
-import { clamp } from './lib/geometry';
+import { clamp, clampCameraLayout } from './lib/geometry';
+import { computeBackingScale } from './layout/backing';
+import { useDevicePixelRatio, useStageOrientation } from './layout/useStageOrientation';
 import {
-  STAGE_WIDTH,
-  STAGE_HEIGHT,
-  DEFAULT_CAMERA_LAYOUT,
+  BACKING_SCALE,
   DEFAULT_VIEWPORT,
   blankPage,
   cameraAspectFor,
+  defaultCameraLayout,
   nextId,
+  stageSizeFor,
 } from './types';
 import type {
   BackgroundKind,
@@ -73,12 +76,20 @@ import type {
   CameraLayout,
   CameraShape,
   ShapeKind,
+  StageOrientation,
+  StageSize,
   Tool,
 } from './types';
+
+interface ToastAction {
+  label: string;
+  onClick: () => void;
+}
 
 interface Toast {
   id: number;
   text: string;
+  action?: ToastAction;
 }
 
 export default function App() {
@@ -93,7 +104,19 @@ export default function App() {
   const [collapsed, setCollapsed] = useState(false);
   const [history, setHistory] = useState({ undo: false, redo: false });
   const [hasInk, setHasInk] = useState(false);
-  const [cameraLayout, setCameraLayout] = useState<CameraLayout>(DEFAULT_CAMERA_LAYOUT);
+  // Stage window geometry: 16:9 in landscape, 9:16 in portrait. Applied only
+  // while no recording is active — mid-take rotations park in a pending ref.
+  const rawOrientation = useStageOrientation();
+  const dpr = useDevicePixelRatio();
+  const [stageSize, setStageSize] = useState<StageSize>(() => stageSizeFor(rawOrientation));
+  const stageSizeRef = useRef(stageSize);
+  stageSizeRef.current = stageSize;
+  // Session-only preset override from portrait auto-switch — never persisted,
+  // so the saved preference keeps reflecting the last explicit choice.
+  const [presetOverride, setPresetOverride] = useState<'vertical' | null>(null);
+  const [cameraLayout, setCameraLayout] = useState<CameraLayout>(() =>
+    defaultCameraLayout(stageSizeFor(rawOrientation)),
+  );
   const [cameraVisible, setCameraVisible] = useState(true);
   const [scale, setScale] = useState(1);
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -155,7 +178,7 @@ export default function App() {
   const viewportRef = useRef<Viewport | null>(null);
   const videoElRef = useRef<HTMLVideoElement | null>(null);
   const scaleRef = useRef(1);
-  const cameraLayoutRef = useRef<CameraLayout>(DEFAULT_CAMERA_LAYOUT);
+  const cameraLayoutRef = useRef<CameraLayout>(cameraLayout);
   const fitRef = useRef<HTMLDivElement>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
   micStreamRef.current = mic.stream;
@@ -173,9 +196,9 @@ export default function App() {
   // ---- toasts --------------------------------------------------------------
 
   const toastId = useRef(0);
-  const pushToast = useCallback((text: string) => {
+  const pushToast = useCallback((text: string, action?: ToastAction) => {
     const id = ++toastId.current;
-    setToasts((ts) => [...ts.filter((t) => t.text !== text), { id, text }]);
+    setToasts((ts) => [...ts.filter((t) => t.text !== text), { id, text, action }]);
     window.setTimeout(() => {
       setToasts((ts) => ts.filter((t) => t.id !== id));
     }, 4500);
@@ -189,13 +212,14 @@ export default function App() {
     (reason: CutoutFallbackReason) => {
       setCameraLayout((l) => {
         if (l.shape !== 'cutout') return l;
+        const stage = stageSizeRef.current;
         const height = Math.round(l.width * cameraAspectFor('rounded'));
         return {
           ...l,
           shape: 'rounded',
           height,
-          x: clamp(l.x, 0, STAGE_WIDTH - l.width),
-          y: clamp(l.y, 0, STAGE_HEIGHT - height),
+          x: clamp(l.x, 0, stage.w - l.width),
+          y: clamp(l.y, 0, stage.h - height),
         };
       });
       pushToast(
@@ -325,8 +349,10 @@ export default function App() {
       setTool(saved.tool);
       setColor(saved.color);
       setWidth(saved.width);
-      setCameraLayout(saved.cameraLayout);
-      cameraLayoutRef.current = saved.cameraLayout;
+      // The lesson may have been saved in the other orientation.
+      const layout = clampCameraLayout(saved.cameraLayout, stageSizeRef.current);
+      setCameraLayout(layout);
+      cameraLayoutRef.current = layout;
       viewport.set(saved.viewport);
       engine.loadStrokes(saved.strokes);
       setHasInk(saved.strokes.length > 0);
@@ -342,8 +368,10 @@ export default function App() {
       setTool(board.tool);
       setColor(board.color);
       setWidth(board.width);
-      setCameraLayout(board.cameraLayout);
-      cameraLayoutRef.current = board.cameraLayout;
+      // The board may have been saved in the other orientation.
+      const layout = clampCameraLayout(board.cameraLayout, stageSizeRef.current);
+      setCameraLayout(layout);
+      cameraLayoutRef.current = layout;
       const pages = board.pages.length > 0 ? board.pages : [blankPage()];
       const found = pages.findIndex((p) => p.id === board.activePageId);
       const activeIndex = found >= 0 ? found : 0;
@@ -643,7 +671,11 @@ export default function App() {
     async (file: File) => {
       setPdfProgress({ done: 0, total: 0 });
       try {
-        const result = await importPdf(file, (done, total) => setPdfProgress({ done, total }));
+        const result = await importPdf(
+          file,
+          (done, total) => setPdfProgress({ done, total }),
+          stageSizeRef.current,
+        );
         if (result.totalPages > result.pages.length) {
           pushToast(`Long PDF. Imported the first ${MAX_PDF_PAGES} pages.`);
         }
@@ -769,11 +801,14 @@ export default function App() {
 
   // ---- stage scaling -----------------------------------------------------------
 
-  useEffect(() => {
+  // Layout effect: the first paint must already be scaled — the stage's
+  // wrapper takes its layout size from the scale, and a one-frame flash of
+  // an unscaled 720/1280px box would visibly jump.
+  useLayoutEffect(() => {
     const el = fitRef.current;
     if (!el) return;
     const update = (w: number, h: number) => {
-      const s = clamp(Math.min(w / STAGE_WIDTH, h / STAGE_HEIGHT), 0.15, 2.5);
+      const s = clamp(Math.min(w / stageSize.w, h / stageSize.h), 0.15, 2.5);
       scaleRef.current = s;
       setScale(s);
     };
@@ -784,7 +819,7 @@ export default function App() {
     });
     ro.observe(el);
     return () => ro.disconnect();
-  }, []);
+  }, [stageSize]);
 
   // ---- recording -----------------------------------------------------------
 
@@ -808,17 +843,20 @@ export default function App() {
     [getCutoutCanvas],
   );
 
-  const preset = presetById(settings.presetId);
+  const preset = presetById(presetOverride ?? settings.presetId);
   const presetRef = useRef(preset);
   presetRef.current = preset;
-  const getPreset = useCallback(() => presetRef.current, []);
+  const getRecordingSetup = useCallback(
+    () => ({ preset: presetRef.current, stage: stageSizeRef.current }),
+    [],
+  );
 
   const getMicStream = useCallback(() => micStreamRef.current, []);
   const getSessionMeta = useCallback(
     () => ({ boardId: boardIdRef.current, title: lessonRef.current.title }),
     [],
   );
-  const recorder = useRecorder(sources, getMicStream, getPreset, getSessionMeta, pushToast);
+  const recorder = useRecorder(sources, getMicStream, getRecordingSetup, getSessionMeta, pushToast);
 
   // ---- crash recovery --------------------------------------------------------
 
@@ -831,14 +869,23 @@ export default function App() {
         void deleteSessionById(session.manifest.sessionId);
         return;
       }
+      // Recovered chunks are a raw streaming container — rewrite into a
+      // seekable file like a normal take; fall back to the raw bytes.
+      const fixed = await remuxForDelivery(blob);
+      const delivered = fixed ?? {
+        blob,
+        mimeType: session.manifest.mimeType,
+        extension: session.manifest.extension,
+      };
       setRecovered({
         take: {
-          blob,
-          url: URL.createObjectURL(blob),
-          mimeType: session.manifest.mimeType,
-          extension: session.manifest.extension,
+          blob: delivered.blob,
+          url: URL.createObjectURL(delivered.blob),
+          mimeType: delivered.mimeType,
+          extension: delivered.extension,
           durationMs: session.manifest.activeMs,
           createdAt: session.manifest.startedAt,
+          seekable: fixed !== null,
         },
         sessionId: session.manifest.sessionId,
         boardId: session.manifest.boardId,
@@ -879,6 +926,7 @@ export default function App() {
       extension: recovered.take.extension,
       durationMs: recovered.take.durationMs,
       createdAt: recovered.take.createdAt,
+      seekable: recovered.take.seekable,
     });
   }, [recovered]);
 
@@ -895,6 +943,7 @@ export default function App() {
       extension: recorderTake.extension,
       durationMs: recorderTake.durationMs,
       createdAt: recorderTake.createdAt,
+      seekable: recorderTake.seekable,
     });
   }, [recorderTake]);
 
@@ -903,6 +952,88 @@ export default function App() {
     recorder.phase === 'recording' ||
     recorder.phase === 'paused' ||
     recorder.phase === 'stopping';
+
+  // ---- portrait stage + vertical preset auto-switch ---------------------------
+
+  // Rotation that arrived mid-take, applied when the recorder lands back in
+  // idle/complete (SPEC: never change layout or aspect during a recording).
+  const pendingOrientationRef = useRef<StageOrientation | null>(null);
+  /** Last orientation the stage/preset logic ran for — the auto-switch fires
+   *  on transitions only, so Undo isn't immediately re-overridden. */
+  const appliedOrientationRef = useRef<StageOrientation | null>(null);
+  const lockToastShownRef = useRef(false);
+  const verticalHintShownRef = useRef(false);
+  const presetOverrideRef = useRef(presetOverride);
+  presetOverrideRef.current = presetOverride;
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
+
+  // One lock hint per take.
+  useEffect(() => {
+    if (recorder.phase === 'countdown') lockToastShownRef.current = false;
+  }, [recorder.phase]);
+
+  useEffect(() => {
+    const next = stageSizeFor(rawOrientation);
+    if (recordingActive) {
+      if (next.w !== stageSizeRef.current.w) {
+        pendingOrientationRef.current = rawOrientation;
+        if (!lockToastShownRef.current) {
+          lockToastShownRef.current = true;
+          pushToast('The canvas layout is locked while recording.');
+        }
+      } else {
+        pendingOrientationRef.current = null;
+      }
+      return;
+    }
+    pendingOrientationRef.current = null;
+    if (appliedOrientationRef.current === rawOrientation) return;
+    appliedOrientationRef.current = rawOrientation;
+    setStageSize(next);
+    if (rawOrientation === 'portrait') {
+      // Recommend vertical video in portrait (SPEC): auto-select while idle,
+      // as a session override the user can undo — the saved preset is
+      // untouched. Perf-gated devices keep their preset and get a hint.
+      if (presetRef.current.id !== 'vertical') {
+        const supportsVertical = deviceProfile ? deviceProfile.supports1080p : true;
+        if (supportsVertical) {
+          setPresetOverride('vertical');
+          pushToast('Recording switched to Vertical to match this screen.', {
+            label: 'Undo',
+            onClick: () => setPresetOverride(null),
+          });
+        } else if (!verticalHintShownRef.current) {
+          verticalHintShownRef.current = true;
+          pushToast(
+            'Vertical recording is unavailable on this device. The video captures the marked frame.',
+          );
+        }
+      }
+    } else if (presetOverrideRef.current) {
+      setPresetOverride(null);
+      pushToast(`Recording is back to ${presetById(settingsRef.current.presetId).label}.`);
+    }
+  }, [rawOrientation, recordingActive, deviceProfile, pushToast]);
+
+  // DPR-aware display backing, floored so the ink cache always covers the
+  // active preset's output resolution. Frozen while a take is running — the
+  // recompute lands when the recorder returns to idle/complete.
+  const [backingScale, setBackingScale] = useState(BACKING_SCALE);
+  useEffect(() => {
+    if (recordingActive) return;
+    setBackingScale(computeBackingScale(stageSize, preset));
+  }, [stageSize, preset, dpr, recordingActive]);
+
+  // Rotation re-clamps the stage-anchored camera bubble into the new bounds.
+  useEffect(() => {
+    setCameraLayout((l) => {
+      const next = clampCameraLayout(l, stageSize);
+      return next.x === l.x && next.y === l.y && next.width === l.width && next.height === l.height
+        ? l
+        : next;
+    });
+  }, [stageSize]);
 
   // DEV hook so e2e tests can poll the recorder without driving the UI.
   const recorderApiRef = useRef(recorder);
@@ -940,6 +1071,7 @@ export default function App() {
       // A gated preset can outlive a re-probe that says no — drop back.
       if (presetRef.current.needsPerformance && !result.profile.supports1080p) {
         presetRef.current = presetById('compat');
+        setPresetOverride(null);
         updateSettings({ presetId: 'compat' });
         pushToast('Dropped to 720p because this device failed the 1080p performance check.');
       }
@@ -984,6 +1116,8 @@ export default function App() {
 
   const handlePreset = useCallback(
     (id: string) => {
+      // An explicit choice replaces any portrait auto-switch override.
+      setPresetOverride(null);
       const next = presetById(id);
       if (!next.needsPerformance) {
         updateSettings({ presetId: next.id });
@@ -1050,10 +1184,11 @@ export default function App() {
 
   const handleShape = (shape: CameraShape) => {
     setCameraLayout((l) => {
+      const stage = stageSizeRef.current;
       const aspect = cameraAspectFor(shape);
       const next: CameraLayout = { ...l, shape, height: Math.round(l.width * aspect) };
-      next.y = clamp(next.y, 0, STAGE_HEIGHT - next.height);
-      next.x = clamp(next.x, 0, STAGE_WIDTH - next.width);
+      next.y = clamp(next.y, 0, stage.h - next.height);
+      next.x = clamp(next.x, 0, stage.w - next.width);
       return next;
     });
   };
@@ -1171,10 +1306,8 @@ export default function App() {
           // Back to 100% zoom, keeping the stage center fixed.
           const viewport = viewportRef.current;
           if (viewport) {
-            viewport.zoomAt(
-              { x: STAGE_WIDTH / 2, y: STAGE_HEIGHT / 2 },
-              1 / viewport.get().zoom,
-            );
+            const { w, h } = viewport.getStageSize();
+            viewport.zoomAt({ x: w / 2, y: h / 2 }, 1 / viewport.get().zoom);
           }
           break;
         }
@@ -1218,6 +1351,11 @@ export default function App() {
   ]
     .filter(Boolean)
     .join(' ');
+
+  // Frame guide whenever the recording crops the stage (aspect mismatch) —
+  // vertical preset on a landscape stage or a 16:9 preset on a portrait one.
+  const frameCrop = outputCrop(preset, stageSize);
+  const frameCropped = frameCrop.w < stageSize.w || frameCrop.h < stageSize.h;
 
   return (
     <div className={`app${settings.handedness === 'left' ? ' hand-left' : ''}`}>
@@ -1287,13 +1425,31 @@ export default function App() {
         }}
       >
         <div className="stage-fit" ref={fitRef}>
-          <div className={stageClasses} style={{ transform: `scale(${scale})` }}>
+          {/* The scale box's LAYOUT size is the stage's visual size, so flex
+              centering never sees an overflowing child. WebKit start-aligns
+              overflowing centered flex items (Chromium overhangs them evenly),
+              so centering a transform-scaled 720/1280px box directly is
+              engine-dependent — this wrapper makes it deterministic. */}
+          <div
+            className="stage-scale-box"
+            style={{ width: stageSize.w * scale, height: stageSize.h * scale }}
+          >
+            <div
+              className={stageClasses}
+              style={{
+                width: stageSize.w,
+                height: stageSize.h,
+                transform: `scale(${scale})`,
+              }}
+            >
             <StageCanvas
               background={background}
               tool={tool}
               color={color}
               width={width}
               shapeKind={shapeKind}
+              stageSize={stageSize}
+              backingScale={backingScale}
               onReady={handleEngineReady}
               onHistoryChange={handleHistoryChange}
               onCommit={handleCommit}
@@ -1327,6 +1483,7 @@ export default function App() {
             {camera.stream && cameraVisible && (
               <CameraOverlay
                 stream={camera.stream}
+                stage={stageSize}
                 layout={cameraLayout}
                 layoutRef={cameraLayoutRef}
                 scaleRef={scaleRef}
@@ -1344,10 +1501,13 @@ export default function App() {
                 }}
               />
             )}
-            {preset.id === 'vertical' && (
-              // SPEC §4.6 "a predictable frame": mark the recorded 9:16 crop.
+            {frameCropped && (
+              // SPEC §4.6 "a predictable frame": mark the recorded crop.
               <div className="frame-guide" aria-hidden="true">
-                <div className="frame-guide-window" style={{ width: outputCrop(preset).w }} />
+                <div
+                  className="frame-guide-window"
+                  style={{ width: frameCrop.w, height: frameCrop.h }}
+                />
               </div>
             )}
             {!hasInk && recorder.phase === 'idle' && (
@@ -1358,6 +1518,7 @@ export default function App() {
             {recorder.phase === 'countdown' && (
               <Countdown value={recorder.countdownValue} onCancel={recorder.cancelCountdown} />
             )}
+            </div>
           </div>
         </div>
 
@@ -1489,6 +1650,18 @@ export default function App() {
         {toasts.map((t) => (
           <div key={t.id} className="toast">
             {t.text}
+            {t.action && (
+              <button
+                type="button"
+                className="toast-action"
+                onClick={() => {
+                  t.action?.onClick();
+                  setToasts((ts) => ts.filter((x) => x.id !== t.id));
+                }}
+              >
+                {t.action.label}
+              </button>
+            )}
           </div>
         ))}
       </div>

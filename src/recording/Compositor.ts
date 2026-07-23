@@ -3,8 +3,7 @@ import { drawElement } from '../lib/elements';
 import { drawLaserTrail } from '../lib/laser';
 import type { LaserPoint } from '../lib/laser';
 import { coverCrop, cameraClipPath } from '../lib/geometry';
-import { BACKING_SCALE } from '../types';
-import type { BackgroundKind, BoardElement, CameraLayout, ViewportState } from '../types';
+import type { BackgroundKind, BoardElement, CameraLayout, StageSize, ViewportState } from '../types';
 import { effectiveView, outputCrop } from './presets';
 import type { OutputCrop, RecordingPreset } from './presets';
 
@@ -42,11 +41,13 @@ export class Compositor {
   constructor(
     private sources: CompositorSources,
     private preset: RecordingPreset,
+    /** Stage geometry snapshotted at take start — frozen for the whole take. */
+    private stage: StageSize,
   ) {
     this.canvas = document.createElement('canvas');
     this.canvas.width = preset.width;
     this.canvas.height = preset.height;
-    this.crop = outputCrop(preset);
+    this.crop = outputCrop(preset, stage);
     const ctx = this.canvas.getContext('2d');
     if (!ctx) throw new Error('Canvas 2D is not available');
     this.ctx = ctx;
@@ -87,23 +88,26 @@ export class Compositor {
     const { width: outW, height: outH } = this.preset;
     const crop = this.crop;
     const view = this.sources.getViewport();
-    const eff = effectiveView(view, this.preset);
+    const eff = effectiveView(view, this.preset, this.stage);
 
     drawBackground(ctx, this.sources.getBackground(), { ...eff, outW, outH });
 
-    // The ink cache always holds the current viewport's view at 2×, so a
-    // source-rect blit of the crop keeps the recording glued to the viewport
-    // (a clean downscale for 1080p, a mild upscale for vertical). It is
-    // rebuilt on the engine's rAF, so a frame sampled mid-pan can be one
-    // frame stale relative to the active stroke — invisible at 30 fps.
+    // The ink cache always holds the current viewport's view at the display
+    // backing scale, so a source-rect blit of the crop keeps the recording
+    // glued to the viewport. The backing is derived from the canvas itself
+    // (ink.width / stage.w) so the blit stays correct for any DPR-aware
+    // scale. The cache is rebuilt on the engine's rAF, so a frame sampled
+    // mid-pan can be one frame stale relative to the active stroke —
+    // invisible at 30 fps.
     const ink = this.sources.getInkCanvas();
     if (ink) {
+      const bs = ink.width / this.stage.w;
       ctx.drawImage(
         ink,
-        crop.x * BACKING_SCALE,
-        crop.y * BACKING_SCALE,
-        crop.w * BACKING_SCALE,
-        crop.h * BACKING_SCALE,
+        crop.x * bs,
+        crop.y * bs,
+        crop.w * bs,
+        crop.h * bs,
         0,
         0,
         outW,
