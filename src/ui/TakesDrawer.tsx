@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { StoredTake } from '../persistence/boards';
 import { saveTake } from '../persistence/boards';
-import { remuxForDelivery } from '../recording/remux';
+import { DELIVERY_VERSION, remuxForDelivery } from '../recording/remux';
 import { formatDuration } from './TopBar';
 import { CloseIcon, DownloadIcon, TrashIcon } from './icons';
 
@@ -42,10 +42,12 @@ function TakeRow({ take, onDelete }: { take: StoredTake; onDelete(): void }) {
     void (async () => {
       let blob = take.blob;
       let extension = take.extension;
-      // Takes stored before the seekable-remux fix are raw MediaRecorder
-      // streams (no duration, "Live Broadcast" in Apple players). Heal them
-      // once on first open — a lossless rewrite — and persist the fix.
-      if (!take.seekable) {
+      // Takes stored by an older delivery pipeline get healed once on first
+      // open and the fix persisted: raw MediaRecorder streams (no `seekable`)
+      // become seekable files, and version-1 remuxes get their audio made
+      // player-compatible (Opus-in-MP4 → AAC). The rewrite is idempotent.
+      const storedVersion = take.seekable ? (take.deliveryVersion ?? 1) : 0;
+      if (storedVersion < DELIVERY_VERSION) {
         const fixed = await remuxForDelivery(blob);
         if (fixed) {
           blob = fixed.blob;
@@ -56,6 +58,7 @@ function TakeRow({ take, onDelete }: { take: StoredTake; onDelete(): void }) {
             mimeType: fixed.mimeType,
             extension: fixed.extension,
             seekable: true,
+            deliveryVersion: DELIVERY_VERSION,
           });
         }
       }
