@@ -3,8 +3,7 @@ import { InkEngine } from './InkEngine';
 import type { TextEditRequest } from './InkEngine';
 import { Viewport } from './Viewport';
 import { drawBackground } from '../lib/backgrounds';
-import { STAGE_WIDTH, STAGE_HEIGHT, BACKING_SCALE } from '../types';
-import type { BackgroundKind, ShapeKind, Tool } from '../types';
+import type { BackgroundKind, ShapeKind, StageSize, Tool } from '../types';
 
 interface StageCanvasProps {
   background: BackgroundKind;
@@ -12,6 +11,10 @@ interface StageCanvasProps {
   color: string;
   width: number;
   shapeKind: ShapeKind;
+  /** Logical stage window (landscape or portrait). */
+  stageSize: StageSize;
+  /** DPR-aware backing-store multiplier for the display canvases. */
+  backingScale: number;
   onReady(engine: InkEngine, viewport: Viewport): void;
   onHistoryChange(canUndo: boolean, canRedo: boolean): void;
   onCommit(): void;
@@ -43,27 +46,36 @@ export function StageCanvas(props: StageCanvasProps) {
     onSelectionChange: props.onSelectionChange,
   };
 
+  // Latest geometry without re-running the mount effect.
+  const geometryRef = useRef({ stageSize: props.stageSize, backingScale: props.backingScale });
+  geometryRef.current = { stageSize: props.stageSize, backingScale: props.backingScale };
+
   const redrawBackground = () => {
     const canvas = bgRef.current;
     const viewport = viewportRef.current;
     if (!canvas || !viewport) return;
     const ctx = canvas.getContext('2d')!;
-    ctx.setTransform(BACKING_SCALE, 0, 0, BACKING_SCALE, 0, 0);
+    const stage = viewport.getStageSize();
+    const bs = viewport.getDisplayScale();
+    ctx.setTransform(bs, 0, 0, bs, 0, 0);
     drawBackground(ctx, bgKindRef.current, {
       ...viewport.get(),
-      outW: STAGE_WIDTH,
-      outH: STAGE_HEIGHT,
+      outW: stage.w,
+      outH: stage.h,
     });
   };
   const redrawRef = useRef(redrawBackground);
   redrawRef.current = redrawBackground;
 
   useEffect(() => {
+    const { stageSize, backingScale } = geometryRef.current;
     const bgCanvas = bgRef.current!;
-    bgCanvas.width = STAGE_WIDTH * BACKING_SCALE;
-    bgCanvas.height = STAGE_HEIGHT * BACKING_SCALE;
+    bgCanvas.width = Math.round(stageSize.w * backingScale);
+    bgCanvas.height = Math.round(stageSize.h * backingScale);
 
     const viewport = new Viewport();
+    viewport.setDisplayScale(backingScale);
+    viewport.setStageSize(stageSize.w, stageSize.h);
     const engine = new InkEngine(inkRef.current!, activeRef.current!, viewport, {
       onHistoryChange: (u, r) => cbRef.current.onHistoryChange(u, r),
       onCommit: () => cbRef.current.onCommit(),
@@ -98,6 +110,28 @@ export function StageCanvas(props: StageCanvasProps) {
       viewportRef.current = null;
     };
   }, []);
+
+  // Stage size / backing changed (rotation, DPR shift, recording floor):
+  // update the viewport first (the ink cache rebuild reads it), then resize
+  // every layer and repaint in the same effect so no blank frame is shown.
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    const engine = engineRef.current;
+    const bgCanvas = bgRef.current;
+    if (!viewport || !engine || !bgCanvas) return;
+    const { w, h } = props.stageSize;
+    const bs = props.backingScale;
+    const current = viewport.getStageSize();
+    if (current.w === w && current.h === h && viewport.getDisplayScale() === bs) {
+      return; // Mount effect already built this geometry.
+    }
+    viewport.setDisplayScale(bs);
+    viewport.setStageSize(w, h);
+    bgCanvas.width = Math.round(w * bs);
+    bgCanvas.height = Math.round(h * bs);
+    engine.setStageGeometry(w, h, bs);
+    redrawRef.current();
+  }, [props.stageSize, props.backingScale]);
 
   useEffect(() => {
     engineRef.current?.setBrush(props.tool, props.color, props.width);

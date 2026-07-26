@@ -77,7 +77,7 @@ export function TopBar(props: TopBarProps) {
       : 'Turn camera off (C)';
 
   return (
-    <header className="topbar">
+    <header className={`topbar${recordingActive ? ' is-recording' : ''}`}>
       <div className="brand" aria-hidden="true">
         <span className="brand-dot" />
         <span>Scribble Party</span>
@@ -110,7 +110,7 @@ export function TopBar(props: TopBarProps) {
             />
             <button
               type="button"
-              className="pill"
+              className="pill import-pill"
               aria-label="Import image or PDF"
               title="Import image or PDF"
               onClick={() => fileInputRef.current?.click()}
@@ -124,7 +124,7 @@ export function TopBar(props: TopBarProps) {
         {props.onLibrary && (
           <button
             type="button"
-            className="pill"
+            className="pill library-pill"
             aria-label="Saved takes"
             title="Saved takes"
             onClick={props.onLibrary}

@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import type { Viewport } from '../ink/Viewport';
 import type { BBox } from '../lib/strokes';
 import { clamp } from '../lib/geometry';
-import { STAGE_WIDTH, STAGE_HEIGHT } from '../types';
 import { LockIcon, UnlockIcon } from './icons';
 
 interface SelectionActionsProps {
@@ -37,9 +36,10 @@ export function SelectionActions({ viewport, bbox, locked, onToggleLock }: Selec
     };
   }, [viewport]);
 
+  const stage = viewport.getStageSize();
   const anchor = viewport.worldToStage({ x: (bbox.minX + bbox.maxX) / 2, y: bbox.minY });
-  const left = clamp(anchor.x, 60, STAGE_WIDTH - 60);
-  const top = clamp(anchor.y - 44, 8, STAGE_HEIGHT - 44);
+  const left = clamp(anchor.x, 60, stage.w - 60);
+  const top = clamp(anchor.y - 44, 8, stage.h - 44);
 
   return (
     <div className="selection-actions" style={{ left, top }}>

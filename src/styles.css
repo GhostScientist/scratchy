@@ -64,6 +64,12 @@ button:disabled {
 .app {
   display: grid;
   grid-template-rows: auto 1fr;
+  /* Cap the single column at the app's own width: a grid's auto track grows
+     to its items' min-content (the topbar's control row wants ~740px), which
+     inflated the whole layout past narrow phone screens and pushed the stage
+     off-screen. minmax(0, 1fr) makes rows fit the screen; the rows manage
+     their own tight-space behavior. */
+  grid-template-columns: minmax(0, 1fr);
   height: 100%;
 }
 
@@ -131,6 +137,9 @@ button:disabled {
 .pill {
   display: flex;
   align-items: center;
+  /* Centered, not start-aligned: on phones the pills sit at min-width and a
+     left-hugging icon reads as misaligned. */
+  justify-content: center;
   gap: 7px;
   height: 44px;
   min-width: 44px;
@@ -361,10 +370,19 @@ button:disabled {
   min-height: 0;
 }
 
+/* Reserves the stage's VISUAL (scaled) footprint in layout, so flex
+   centering never handles an overflowing child — WebKit start-aligns those
+   while Chromium overhangs them evenly. Sized inline from stageSize×scale. */
+.stage-scale-box {
+  flex: 0 0 auto;
+}
+
+/* Logical width/height (1280×720 or 720×1280) are set inline from the
+   stage-size state; the CSS transform scales it down into the scale box,
+   from the box's top-left corner. */
 .stage {
   position: relative;
-  width: 1280px;
-  height: 720px;
+  transform-origin: 0 0;
   flex: 0 0 auto;
   border-radius: 6px;
   overflow: hidden;
@@ -414,19 +432,22 @@ button:disabled {
   caret-color: currentColor;
 }
 
-/* Recorded-crop guide for non-16:9 presets: dims what the video won't show. */
+/* Recorded-crop guide when the preset's aspect crops the stage: dims what
+   the video won't show. Centered on both axes so it marks a vertical band
+   (vertical preset on a landscape stage) or a horizontal one (16:9 preset on
+   a portrait stage) alike; the window's size is set inline from the crop. */
 .frame-guide {
   position: absolute;
   inset: 0;
   z-index: 15;
   display: flex;
+  align-items: center;
   justify-content: center;
   pointer-events: none;
 }
 
 .frame-guide-window {
-  height: 100%;
-  border-inline: 2px dashed rgba(128, 128, 128, 0.55);
+  border: 2px dashed rgba(128, 128, 128, 0.55);
   box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.22);
 }
 
@@ -1648,11 +1669,13 @@ button:disabled {
 
 /* ---- toasts ---------------------------------------------------------------------- */
 
+/* Full-width strip with centered items — anchoring at left:50% would cap
+   shrink-to-fit width at half the viewport and wrap toasts on phones. */
 .toasts {
   position: fixed;
   bottom: 22px;
-  left: 50%;
-  transform: translateX(-50%);
+  left: 0;
+  right: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -1662,6 +1685,10 @@ button:disabled {
 }
 
 .toast {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
   padding: 11px 18px;
   background: var(--panel-2);
   border: 1px solid var(--panel-3);
@@ -1672,6 +1699,23 @@ button:disabled {
   animation: rise 220ms var(--ease);
   max-width: min(560px, 90vw);
   text-align: center;
+}
+
+/* Inline action (e.g. Undo for the portrait preset auto-switch). */
+.toast-action {
+  pointer-events: auto;
+  flex-shrink: 0;
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: var(--panel-3);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.toast-action:hover {
+  background: var(--accent);
+  color: #fff;
 }
 
 /* ---- animation ------------------------------------------------------------------- */
@@ -1818,6 +1862,153 @@ button:disabled {
 
   .stage-fit {
     margin: 10px 14px 14px 84px;
+  }
+}
+
+/* ---- portrait phones: bottom tool bar --------------------------------------- */
+/* Phones and small foldables only — portrait iPads (≥744 CSS px wide) keep
+   the side rail. The tool rail becomes a bottom bar, the side gutters return
+   to the canvas, and safe-area insets keep everything clear of home
+   indicators and notches. Handedness is a no-op here (the bar is full
+   width), so the hand-left variants collapse into the same layout. */
+@media (orientation: portrait) and (max-width: 700px) {
+  /* Compact top bar: every control the phone needs, none it doesn't. The
+     row must fit the screen width — its popovers (settings, stop-confirm)
+     hang below it, so it cannot become a scroll container. */
+  .topbar {
+    gap: 6px;
+    padding: 0 8px;
+  }
+
+  .brand {
+    display: none;
+  }
+
+  .title-input {
+    flex: 1 1 80px;
+    min-width: 40px;
+    padding: 0 6px;
+  }
+
+  .top-actions {
+    gap: 4px;
+  }
+
+  .pill {
+    min-width: 40px;
+    padding: 0 6px;
+  }
+
+  /* The mic level meter is sub-pixel noise at this size. */
+  .pill .level {
+    display: none;
+  }
+
+  .record-btn {
+    padding: 0 10px;
+    gap: 6px;
+  }
+
+  /* Import and PNG export are desktop niceties — drag-drop and paste still
+     import, and takes download from the preview/library. */
+  .import-pill,
+  .export-menu {
+    display: none;
+  }
+
+  /* While recording, clear space for the timer + pause/stop cluster; the
+     title, board switcher, and takes library are all locked or pointless
+     mid-take anyway. */
+  .topbar.is-recording .title-input,
+  .topbar.is-recording .boards-menu,
+  .topbar.is-recording .library-pill {
+    display: none;
+  }
+
+  .app .rail-wrap,
+  .app.hand-left .rail-wrap {
+    left: 0;
+    right: 0;
+    top: auto;
+    bottom: 0;
+    align-items: flex-end;
+    justify-content: center;
+    padding: 0 max(8px, env(safe-area-inset-right)) calc(8px + env(safe-area-inset-bottom))
+      max(8px, env(safe-area-inset-left));
+  }
+
+  .rail {
+    flex-direction: row;
+    align-items: center;
+    max-height: none;
+    max-width: 100%;
+    padding: 6px 8px;
+  }
+
+  .rail-scroll {
+    flex-direction: row;
+    gap: 3px;
+    max-width: 100%;
+    overflow-y: hidden;
+    overflow-x: auto;
+  }
+
+  .rail-sep {
+    width: 1px;
+    height: 26px;
+    margin: 0 4px;
+  }
+
+  /* Slightly narrower buttons so more tools fit before the row scrolls;
+     height (≥44px via the base rule) keeps the touch target. */
+  .rail-btn {
+    width: 42px;
+  }
+
+  /* Collapsing a bottom bar saves almost nothing, and the chevron is the
+     button that ends up half-clipped at the screen edge. Recording still
+     auto-collapses to the floating handle, which re-expands on tap. */
+  .rail-collapse {
+    display: none;
+  }
+
+  /* Flyouts open upward from the bar, centered above it — the vertical
+     rail's inline top anchor doesn't apply to a horizontal bar. */
+  .rail .flyout,
+  .app.hand-left .rail .flyout {
+    top: auto !important;
+    bottom: calc(100% + 14px);
+    left: 50%;
+    right: auto;
+    transform: translateX(-50%);
+    animation-name: rise;
+  }
+
+  .app .stage-fit,
+  .app.hand-left .stage-fit {
+    margin: 8px 8px calc(72px + env(safe-area-inset-bottom)) 8px;
+  }
+
+  /* Lift the floating aids clear of the bottom bar. */
+  .nav-aids,
+  .app.hand-left .nav-aids {
+    bottom: calc(72px + env(safe-area-inset-bottom));
+  }
+
+  .page-strip {
+    bottom: calc(72px + env(safe-area-inset-bottom));
+    max-width: 92vw;
+  }
+
+  .toasts {
+    bottom: calc(76px + env(safe-area-inset-bottom));
+  }
+}
+
+/* The minimap costs more space than it earns on the narrowest phones. */
+@media (orientation: portrait) and (max-width: 400px) {
+  .minimap {
+    display: none;
   }
 }
 

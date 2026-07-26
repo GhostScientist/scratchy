@@ -1,7 +1,26 @@
-export const STAGE_WIDTH = 1280;
-export const STAGE_HEIGHT = 720;
-/** Fixed backing-store multiplier for display canvases: crisp on hi-dpr,
- *  always >= composition resolution for a clean downscale into the recording. */
+/** Logical size of the stage window onto the infinite world. Exactly two
+ *  sizes exist: 16:9 landscape and its 9:16 transpose for portrait phones.
+ *  Both have the same pixel area and the same short edge, so ink keeps its
+ *  on-screen scale and backing memory is identical in either orientation. */
+export interface StageSize {
+  w: number;
+  h: number;
+}
+
+export const LANDSCAPE_STAGE: StageSize = { w: 1280, h: 720 };
+export const PORTRAIT_STAGE: StageSize = { w: 720, h: 1280 };
+
+export type StageOrientation = 'landscape' | 'portrait';
+
+export function stageSizeFor(orientation: StageOrientation): StageSize {
+  return orientation === 'portrait' ? PORTRAIT_STAGE : LANDSCAPE_STAGE;
+}
+
+export const STAGE_WIDTH = LANDSCAPE_STAGE.w;
+export const STAGE_HEIGHT = LANDSCAPE_STAGE.h;
+/** Reference backing-store multiplier for display canvases: crisp on hi-dpr,
+ *  always >= composition resolution for a clean downscale into the recording.
+ *  The live value is DPR-aware (layout/backing.ts); this is the fallback. */
 export const BACKING_SCALE = 2;
 
 export type Tool =
@@ -133,20 +152,29 @@ export interface Take {
   extension: string;
   durationMs: number;
   createdAt: number;
+  /** True when the blob has been remuxed into a seekable container with a
+   *  real duration (recording/remux.ts). Absent/false = raw MediaRecorder
+   *  bytes, healed lazily when opened from the library. */
+  seekable?: boolean;
 }
 
 export const CAMERA_MIN_WIDTH = 140;
 export const CAMERA_MAX_WIDTH = 640;
 export const CAMERA_ASPECT = 9 / 16;
 
-export const DEFAULT_CAMERA_LAYOUT: CameraLayout = {
-  x: STAGE_WIDTH - 300 - 24,
-  y: STAGE_HEIGHT - Math.round(300 * CAMERA_ASPECT) - 24,
-  width: 300,
-  height: Math.round(300 * CAMERA_ASPECT),
-  shape: 'rounded',
-  mirrored: true,
-};
+/** Bottom-right anchored default camera bubble for a given stage window. */
+export function defaultCameraLayout(stage: StageSize): CameraLayout {
+  return {
+    x: stage.w - 300 - 24,
+    y: stage.h - Math.round(300 * CAMERA_ASPECT) - 24,
+    width: 300,
+    height: Math.round(300 * CAMERA_ASPECT),
+    shape: 'rounded',
+    mirrored: true,
+  };
+}
+
+export const DEFAULT_CAMERA_LAYOUT: CameraLayout = defaultCameraLayout(LANDSCAPE_STAGE);
 
 export function cameraAspectFor(shape: CameraShape): number {
   return shape === 'circle' ? 1 : CAMERA_ASPECT;

@@ -13,7 +13,7 @@ import type { LassoPoint } from '../lib/lasso';
 import { drawLaserTrail, pruneLaserTrail } from '../lib/laser';
 import type { LaserPoint } from '../lib/laser';
 import { onImageCacheChange } from '../lib/imageCache';
-import { STAGE_WIDTH, STAGE_HEIGHT, BACKING_SCALE, isLocked, nextId } from '../types';
+import { isLocked, nextId } from '../types';
 import type {
   BoardElement,
   ImageElement,
@@ -161,6 +161,10 @@ export class InkEngine {
 
   private inkCtx: CanvasRenderingContext2D;
   private activeCtx: CanvasRenderingContext2D;
+  /** Stage geometry mirror of the viewport, cached for per-event hot paths. */
+  private stageW: number;
+  private stageH: number;
+  private backing: number;
   private raf = 0;
   private repaintQueued = false;
   private cacheDirty = false;
@@ -174,6 +178,10 @@ export class InkEngine {
     readonly viewport: Viewport,
     private cb: InkEngineCallbacks,
   ) {
+    const stage = viewport.getStageSize();
+    this.stageW = stage.w;
+    this.stageH = stage.h;
+    this.backing = viewport.getDisplayScale();
     this.inkCtx = this.setupCanvas(inkCanvas);
     this.activeCtx = this.setupCanvas(activeCanvas);
 
@@ -213,12 +221,29 @@ export class InkEngine {
   }
 
   private setupCanvas(canvas: HTMLCanvasElement): CanvasRenderingContext2D {
-    canvas.width = STAGE_WIDTH * BACKING_SCALE;
-    canvas.height = STAGE_HEIGHT * BACKING_SCALE;
+    canvas.width = Math.round(this.stageW * this.backing);
+    canvas.height = Math.round(this.stageH * this.backing);
     const ctx = canvas.getContext('2d');
     if (!ctx) throw new Error('Canvas 2D is not available');
-    ctx.setTransform(BACKING_SCALE, 0, 0, BACKING_SCALE, 0, 0);
+    ctx.setTransform(this.backing, 0, 0, this.backing, 0, 0);
     return ctx;
+  }
+
+  /** Resize the ink/active canvases to a new stage size or backing scale.
+   *  Reallocation clears them, so the ink cache is rebuilt in the same call —
+   *  no frame ever shows a blank layer. Call after viewport.setStageSize. */
+  setStageGeometry(w: number, h: number, backing: number): void {
+    if (this.stageW === w && this.stageH === h && this.backing === backing) return;
+    this.stageW = w;
+    this.stageH = h;
+    this.backing = backing;
+    this.inkCanvas.width = Math.round(w * backing);
+    this.inkCanvas.height = Math.round(h * backing);
+    this.activeCanvas.width = Math.round(w * backing);
+    this.activeCanvas.height = Math.round(h * backing);
+    this.rebuildInkCache();
+    this.cacheDirty = false;
+    this.requestRepaint();
   }
 
   // ---- public API ---------------------------------------------------------
@@ -576,8 +601,8 @@ export class InkEngine {
   private toStage(clientX: number, clientY: number): Point {
     const rect = this.activeCanvas.getBoundingClientRect();
     return {
-      x: ((clientX - rect.left) * STAGE_WIDTH) / rect.width,
-      y: ((clientY - rect.top) * STAGE_HEIGHT) / rect.height,
+      x: ((clientX - rect.left) * this.stageW) / rect.width,
+      y: ((clientY - rect.top) * this.stageH) / rect.height,
     };
   }
 
@@ -890,8 +915,8 @@ export class InkEngine {
     const rect = this.activeCanvas.getBoundingClientRect();
     const { x: vx, y: vy, zoom } = this.viewport.get();
     for (const ev of source) {
-      const sx = ((ev.clientX - rect.left) * STAGE_WIDTH) / rect.width;
-      const sy = ((ev.clientY - rect.top) * STAGE_HEIGHT) / rect.height;
+      const sx = ((ev.clientX - rect.left) * this.stageW) / rect.width;
+      const sy = ((ev.clientY - rect.top) * this.stageH) / rect.height;
       this.active.points.push({
         x: sx / zoom + vx,
         y: sy / zoom + vy,
@@ -1211,7 +1236,7 @@ export class InkEngine {
     }
     if (this.tool === 'select' && this.selectedIds.size > 0) {
       // Selection HUD: dashed bbox per element, screen-space line weight.
-      ctx.setTransform(BACKING_SCALE, 0, 0, BACKING_SCALE, 0, 0);
+      ctx.setTransform(this.backing, 0, 0, this.backing, 0, 0);
       ctx.save();
       ctx.strokeStyle = 'rgba(110, 168, 255, 0.95)';
       ctx.lineWidth = 1.5;
@@ -1254,7 +1279,7 @@ export class InkEngine {
       const now = performance.now();
       this.laserTrail = pruneLaserTrail(this.laserTrail, now);
       if (this.laserTrail.length > 0) {
-        ctx.setTransform(BACKING_SCALE, 0, 0, BACKING_SCALE, 0, 0);
+        ctx.setTransform(this.backing, 0, 0, this.backing, 0, 0);
         drawLaserTrail(ctx, this.laserTrail, this.viewport.get(), now);
         // Keep repainting until the trail has fully faded out.
         this.requestRepaint();
@@ -1262,7 +1287,7 @@ export class InkEngine {
     }
     if (this.tool === 'eraser' && this.cursor) {
       // The cursor is a screen-space HUD: constant size regardless of zoom.
-      ctx.setTransform(BACKING_SCALE, 0, 0, BACKING_SCALE, 0, 0);
+      ctx.setTransform(this.backing, 0, 0, this.backing, 0, 0);
       const p = this.viewport.worldToStage(this.cursor);
       ctx.save();
       ctx.strokeStyle = 'rgba(90, 100, 120, 0.75)';

@@ -1,10 +1,13 @@
 import { useEffect, useState } from 'react';
 import type { InkEngine } from '../ink/InkEngine';
 import type { Viewport } from '../ink/Viewport';
-import { STAGE_WIDTH, STAGE_HEIGHT } from '../types';
 import { FitIcon } from './icons';
 
-const STAGE_CENTER = { x: STAGE_WIDTH / 2, y: STAGE_HEIGHT / 2 };
+/** Zoom anchor: the center of the current stage window. */
+function stageCenter(viewport: Viewport) {
+  const { w, h } = viewport.getStageSize();
+  return { x: w / 2, y: h / 2 };
+}
 
 interface ZoomControlsProps {
   engine: InkEngine;
@@ -53,7 +56,7 @@ export function ZoomControls({ engine, viewport, onEmptyFit }: ZoomControlsProps
         className="zoom-btn"
         aria-label="Zoom out"
         title="Zoom out"
-        onClick={() => viewport.zoomAt(STAGE_CENTER, 1 / 1.25)}
+        onClick={() => viewport.zoomAt(stageCenter(viewport), 1 / 1.25)}
       >
         −
       </button>
@@ -62,7 +65,7 @@ export function ZoomControls({ engine, viewport, onEmptyFit }: ZoomControlsProps
         className="zoom-btn zoom-readout"
         aria-label="Reset zoom to 100% (0)"
         title="Reset zoom to 100% (0)"
-        onClick={() => viewport.zoomAt(STAGE_CENTER, 1 / viewport.get().zoom)}
+        onClick={() => viewport.zoomAt(stageCenter(viewport), 1 / viewport.get().zoom)}
       >
         {pct}%
       </button>
@@ -71,7 +74,7 @@ export function ZoomControls({ engine, viewport, onEmptyFit }: ZoomControlsProps
         className="zoom-btn"
         aria-label="Zoom in"
         title="Zoom in"
-        onClick={() => viewport.zoomAt(STAGE_CENTER, 1.25)}
+        onClick={() => viewport.zoomAt(stageCenter(viewport), 1.25)}
       >
         +
       </button>
