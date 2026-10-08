@@ -216,7 +216,7 @@ export function CameraOverlay(props: CameraOverlayProps) {
             style={{
               left: controlsCenter,
               width: controlsWidth,
-              transform: `translateX(-50%) scale(${1 / scale})`,
+              transform: `scale(${1 / scale}) translateX(-50%)`,
               transformOrigin: controlsBelow ? 'top center' : 'bottom center',
             }}
             onPointerDown={(e) => e.stopPropagation()}
