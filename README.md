@@ -79,7 +79,7 @@ installable/offline behavior against `vite preview`.
   and is disabled during a take so it cannot feed back into the microphone.
 - **Non-destructive take editor**: set in/out points with touch-friendly sliders,
   second-based fields, or the current playhead; preview just the selected range;
-  remove/restore audio; undo/redo edits (including Ctrl/Cmd+Z and Shift+Z); or
+  remove/restore audio; undo/redo edits (including Ctrl/Cmd+Z and Ctrl/Cmd+Shift+Z); or
   reset to the original. Downloads and library saves include the chosen edits,
   with progress and cancellation during processing. Saved takes can be reopened
   with "Edit a copy"; the original library entry is never overwritten.
