@@ -53,7 +53,7 @@ import { ensureDeviceProfile } from './capability/probe';
 import { loadDeviceProfile } from './capability/profile';
 import type { DeviceProfile } from './capability/profile';
 import { presetById, outputCrop } from './recording/presets';
-import { remuxForDelivery } from './recording/remux';
+import { DELIVERY_VERSION, remuxForDelivery } from './recording/remux';
 import { recoverSessions, assembleSession, deleteSessionById } from './recording/RecordingStore';
 import type { RecoverableSession } from './recording/RecordingStore';
 import { RecoveryCard } from './ui/RecoveryCard';
@@ -811,7 +811,8 @@ export default function App() {
   );
 
   const handleEditLibraryTake = useCallback(async (stored: StoredTake) => {
-    const fixed = stored.seekable ? null : await remuxForDelivery(stored.blob);
+    const storedVersion = stored.seekable ? (stored.deliveryVersion ?? 1) : 0;
+    const fixed = storedVersion < DELIVERY_VERSION ? await remuxForDelivery(stored.blob) : null;
     const blob = fixed?.blob ?? stored.blob;
     setLibraryEditor({
       boardId: stored.boardId,
@@ -820,6 +821,7 @@ export default function App() {
         ...stored, blob, mimeType: fixed?.mimeType ?? stored.mimeType,
         extension: fixed?.extension ?? stored.extension,
         seekable: stored.seekable || fixed !== null,
+        deliveryVersion: fixed ? DELIVERY_VERSION : storedVersion,
         url: URL.createObjectURL(blob),
       },
     });
@@ -963,6 +965,7 @@ export default function App() {
       durationMs: take.durationMs,
       createdAt: take.createdAt,
       seekable: take.seekable,
+      deliveryVersion: take.deliveryVersion ?? (take.seekable ? DELIVERY_VERSION : 0),
     });
   }, [recovered]);
 
@@ -980,6 +983,7 @@ export default function App() {
       durationMs: take.durationMs,
       createdAt: take.createdAt,
       seekable: take.seekable,
+      deliveryVersion: take.deliveryVersion ?? (take.seekable ? DELIVERY_VERSION : 0),
     });
   }, [recorderTake]);
 
@@ -1716,6 +1720,7 @@ export default function App() {
               title: libraryEditor.title, blob: take.blob, mimeType: take.mimeType,
               extension: take.extension, durationMs: take.durationMs,
               createdAt: Date.now(), seekable: take.seekable,
+              deliveryVersion: take.deliveryVersion ?? (take.seekable ? DELIVERY_VERSION : 0),
             });
             if (ok) void refreshTakes();
             return ok;

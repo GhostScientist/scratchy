@@ -1,4 +1,5 @@
 import type { Take } from '../types';
+import { DELIVERY_VERSION, deliveryAudioOptions } from './remux';
 
 export interface TakeEdits {
   start: number;
@@ -117,7 +118,11 @@ export async function editTake(
     if (!edits.muted && await input.getPrimaryAudioTrack()) {
       conversion = await Conversion.init({
         input, output, tracks: 'primary', composable: true,
-        video: { discard: true }, audio: { forceTranscode: edits.start > 0 || end < duration },
+        video: { discard: true },
+        audio: {
+          ...await deliveryAudioOptions(input, mp4),
+          forceTranscode: edits.start > 0 || end < duration,
+        },
         trim: { start: edits.start, end }, showWarnings: false,
       });
       if (!conversion.isValid || conversion.discardedTracks.some(
@@ -206,6 +211,7 @@ export async function editTake(
       durationMs: selectedDuration * 1000,
       createdAt: take.createdAt,
       seekable: true,
+      deliveryVersion: DELIVERY_VERSION,
     };
   } finally {
     window.clearTimeout(stallTimer);

@@ -263,11 +263,15 @@ test('trim, audio removal, undo/redo, download and saved copies honor the edit',
     const api = (window as any).__scratchyBoards;
     const { board } = await api.initBoards();
     const rows = await api.listTakes(board.id);
-    return rows.map((row: any) => ({ duration: row.durationMs, seekable: row.seekable, size: row.blob.size }));
+    return rows.map((row: any) => ({
+      duration: row.durationMs, seekable: row.seekable, size: row.blob.size,
+      deliveryVersion: row.deliveryVersion,
+    }));
   });
   expect(stored).toHaveLength(1);
   expect(stored[0].duration).toBeCloseTo(1500, 0);
   expect(stored[0].seekable).toBe(true);
+  expect(stored[0].deliveryVersion).toBe(2);
   const playback = await page.evaluate(async () => {
     const api = (window as any).__scratchyBoards;
     const { board } = await api.initBoards();
