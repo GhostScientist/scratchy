@@ -70,6 +70,10 @@ export interface StoredTake {
   /** True once the blob is a seekable container (see recording/remux.ts).
    *  Takes stored before the remux fix lack it and are healed on open. */
   seekable?: boolean;
+  /** DELIVERY_VERSION (recording/remux.ts) the blob was written by. Takes
+   *  stored by an older delivery pipeline are re-healed on open; a seekable
+   *  take without this field was written by version 1. */
+  deliveryVersion?: number;
 }
 
 const ACTIVE_KEY = 'activeBoardId';

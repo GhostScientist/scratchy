@@ -52,7 +52,7 @@ import { ensureDeviceProfile } from './capability/probe';
 import { loadDeviceProfile } from './capability/profile';
 import type { DeviceProfile } from './capability/profile';
 import { presetById, outputCrop } from './recording/presets';
-import { remuxForDelivery } from './recording/remux';
+import { DELIVERY_VERSION, remuxForDelivery } from './recording/remux';
 import { recoverSessions, assembleSession, deleteSessionById } from './recording/RecordingStore';
 import type { RecoverableSession } from './recording/RecordingStore';
 import { RecoveryCard } from './ui/RecoveryCard';
@@ -927,6 +927,7 @@ export default function App() {
       durationMs: recovered.take.durationMs,
       createdAt: recovered.take.createdAt,
       seekable: recovered.take.seekable,
+      deliveryVersion: recovered.take.seekable ? DELIVERY_VERSION : 0,
     });
   }, [recovered]);
 
@@ -944,6 +945,7 @@ export default function App() {
       durationMs: recorderTake.durationMs,
       createdAt: recorderTake.createdAt,
       seekable: recorderTake.seekable,
+      deliveryVersion: recorderTake.seekable ? DELIVERY_VERSION : 0,
     });
   }, [recorderTake]);
 
