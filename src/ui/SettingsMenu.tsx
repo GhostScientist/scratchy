@@ -18,6 +18,8 @@ interface SettingsMenuProps {
   onDeviceCheck(): void;
   /** Re-open the first-launch welcome tour. */
   onReplayTour(): void;
+  countdownSeconds: number;
+  onCountdown(seconds: 0 | 3 | 5 | 10): void;
 }
 
 export function SettingsMenu(props: SettingsMenuProps) {
@@ -96,13 +98,29 @@ export function SettingsMenu(props: SettingsMenuProps) {
             {PRESETS.find((p) => p.id === props.presetId)?.description}
             {props.presetLocked ? ' · locked while recording' : ''}
           </p>
+          <div className="settings-label" id="settings-countdown-label">Recording countdown</div>
+          <div className="settings-seg" role="group" aria-labelledby="settings-countdown-label">
+            {([0, 3, 5, 10] as const).map((seconds) => (
+              <button
+                key={seconds}
+                type="button"
+                aria-label={seconds === 0 ? 'No countdown' : `${seconds} second countdown`}
+                aria-pressed={props.countdownSeconds === seconds}
+                className={props.countdownSeconds === seconds ? 'active' : ''}
+                disabled={props.presetLocked}
+                onClick={() => props.onCountdown(seconds)}
+              >
+                {seconds === 0 ? 'Off' : `${seconds}s`}
+              </button>
+            ))}
+          </div>
           <div className="settings-label">This device</div>
           <p className="settings-device">
             {props.deviceSummary ?? 'Not checked yet. It runs before your first recording.'}
           </p>
           <button
             type="button"
-            disabled={props.deviceChecking}
+            disabled={props.deviceChecking || props.presetLocked}
             onClick={props.onDeviceCheck}
           >
             {props.deviceChecking ? 'Checking…' : 'Run device check'}

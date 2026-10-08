@@ -60,9 +60,38 @@ installable/offline behavior against `vite preview`.
   viewport every frame (background → ink → active stroke → laser → camera),
   so panning and zooming mid-recording tours the board on camera.
   `canvas.captureStream(30)` + mic track → `MediaRecorder` with runtime MIME
-  negotiation (mp4/h264 first, webm fallback), 3-second cancellable countdown,
+  negotiation (mp4/h264 first, webm fallback), configurable cancellable countdown
+  (off / 3 / 5 / 10 seconds; Escape also cancels),
   timer, deliberate two-step stop.
-- **Pause and resume**: pause mid-take (`Space` while recording, or the top-bar
+- **Presenter notes / teleprompter**: the notes button opens a private script
+  saved with each board. Edit or read it with adjustable text size and scroll
+  speed, auto-scroll, pause, and rewind. Scrolling waits during countdown and
+  recording pauses; touching or scrolling the script manually pauses auto-scroll.
+  Notes are never included in recorded video, board thumbnails, or PNG exports.
+- **Focused phone/tablet recording**: focus mode expands the board to the
+  available viewport, retaining recording controls, a compact page switcher,
+  and an expandable drawing toolbar. Touch devices enter focus when recording
+  starts. Phones use a 9:16 stage in portrait; notes stack above the board on
+  portrait phones/tablets and sit alongside it in landscape. The compact
+  "More controls" menu keeps camera, microphone, settings, library, image/PDF
+  import, and PNG export accessible on smaller screens. Camera controls retain
+  44px touch targets even when the board is scaled down. Library playback closes
+  and is disabled during a take so it cannot feed back into the microphone.
+- **Non-destructive take editor**: set in/out points with touch-friendly sliders,
+  second-based fields, or the current playhead; preview just the selected range;
+  remove/restore audio; undo/redo edits (including Ctrl/Cmd+Z and Shift+Z); or
+  reset to the original. Downloads and library saves include the chosen edits,
+  with progress and cancellation during processing. Saved takes can be reopened
+  with "Edit a copy"; the original library entry is never overwritten.
+  Processed edits remain available as a direct download link, including on
+  browsers that require a fresh tap after rendering.
+  Editing runs locally using browser codecs (WebCodecs). Unsupported codecs
+  produce an explicit error and retain the original download rather than
+  silently exporting an untrimmed or audio-less file. Edits are session-only
+  until exported/saved; leaving unexported edits requires confirmation.
+  The export encoder uses bounded low-latency queues for WebKit compatibility,
+  and a 15-second no-progress watchdog releases stalled jobs with an error.
+- **Pause and resume**: pause mid-take (`Space` while drawing, or the top-bar
   control); the timer and take duration count active time only, and a clear
   "Paused" label shows state. Hidden automatically on browsers where the
   capability probe finds pause unreliable.
@@ -91,7 +120,7 @@ installable/offline behavior against `vite preview`.
 - **Takes library**: "Save to library" persists recordings (Blobs in
   IndexedDB) per board; the drawer plays, downloads, and deletes takes and
   shows a device-storage estimate. Unsaved takes remain preview-only.
-- **PNG export**: current view at 2× (2560×1440) or the whole board fit to
+- **PNG export**: current view at 2× (2560×1440 landscape, 1440×2560 portrait) or the whole board fit to
   its ink (longest edge ≤ 4096px), named after the lesson title.
 - **Installable PWA**: web app manifest + Workbox service worker precache the
   app shell, so the studio installs to the home screen and opens fully
@@ -124,24 +153,24 @@ installable/offline behavior against `vite preview`.
 | Stage | `ink/StageCanvas.tsx` | bg / ink / active canvas layers at a fixed 2× backing store |
 | Rendering | `lib/strokes.ts`, `lib/elements.ts`, `lib/lasso.ts`, `lib/backgrounds.ts`, `lib/laser.ts` | Path2D + bbox caches per element; stroke/shape/text dispatch shared by display, compositor, minimap, and PNG export; point-in-polygon lasso |
 | Media | `media/useCamera.ts`, `useMicrophone.ts`, `CameraOverlay.tsx` | tracks stopped the moment they're disabled |
-| Recording | `recording/Compositor.ts`, `useRecorder.ts`, `presets.ts`, `mime.ts`, `RecordingStore.ts`, `PreviewModal.tsx` | preset-sized compositor canvas driven by an "effective viewport" (stage crop + scale); pause/resume with active-time accounting; chunks persist incrementally with a manifest for crash recovery |
+| Recording | `recording/Compositor.ts`, `useRecorder.ts`, `presets.ts`, `mime.ts`, `RecordingStore.ts`, `PreviewModal.tsx`, `editTake.ts`, `remux.ts` | preset-sized, frame-rate-limited compositor; configurable countdown; pause/resume with active-time accounting; recovery chunks; lazy-loaded local trimming/transcoding and seekable export |
 | Capability | `capability/probe.ts`, `profile.ts` | SPEC §9 checks + smoke recording + 1080p performance probe, cached as a localStorage device profile |
 | Persistence | `persistence/db.ts`, `boards.ts`, `assets.ts`, `autosave.ts` | minimal IDB wrapper (v3: boards, takes, meta, recSessions, recChunks, assets); multi-board + pages + takes + image assets (orphans swept at init/board-delete); localStorage fallback + v1→v5 migrations |
 | Import | `import/images.ts`, `import/pdf.ts`, `lib/imageCache.ts` | image files → assets + elements; PDF → one locked backdrop page per PDF page via lazy-loaded pdf.js (legacy build, bundled worker); LRU ImageBitmap cache keyed by assetId |
 | Settings | `settings/settings.ts` | device-global prefs (handedness, preset) in localStorage, applied at first paint |
 | Export | `export/png.ts` | view/board PNG via the same culled world renderer |
-| UI | `ui/Toolbar.tsx`, `TopBar.tsx`, `SettingsMenu.tsx`, `Minimap.tsx`, `ZoomControls.tsx`, `BoardsMenu.tsx`, `PageStrip.tsx`, `SelectionActions.tsx`, `TakesDrawer.tsx`, `ExportMenu.tsx`, `RecoveryCard.tsx`, `TextEditorOverlay.tsx` | ≥44px touch targets, no hover-required actions |
+| UI | `ui/Toolbar.tsx`, `TopBar.tsx`, `SettingsMenu.tsx`, `PresenterNotes.tsx`, `Minimap.tsx`, `ZoomControls.tsx`, `BoardsMenu.tsx`, `PageStrip.tsx`, `SelectionActions.tsx`, `TakesDrawer.tsx`, `ExportMenu.tsx`, `RecoveryCard.tsx`, `TextEditorOverlay.tsx` | private teleprompter, focused recording layout, small-screen controls menu, touch-first controls |
 | PWA | `vite.config.ts` (vite-plugin-pwa), `public/icons/` | autoUpdate service worker, precached shell, installable manifest |
 
 ## Not yet built (per spec, post-MVP here)
 
 OPFS recording storage, stroke transformation beyond move (resize/rotate is
-images-only), equation recognition, background blur, WebCodecs export, and
+images-only), equation recognition, background blur, multi-clip timeline editing, and
 the other SPEC §21 future opportunities.
 
 ## Verification
 
-`npm run test:e2e` runs 48 Playwright tests covering zoom anchoring, world-coordinate
+`npm run test:e2e` runs the Playwright suite covering zoom anchoring, world-coordinate
 invariance under pans, hand/space/pinch gestures, viewport persistence,
 v1→IndexedDB migration, board isolation across reloads, the takes library, the
 laser pointer, navigation aids, PNG export dimensions, left-handed layout,
@@ -152,7 +181,11 @@ crash recovery across reloads, the shape/text/lasso tools with the v3→v4
 board migration, pages (isolation, navigation, duplicate/reorder/delete,
 reload persistence, v4→v5 migration), image import (move/resize/undo,
 lock/unlock semantics, asset round-trip), and PDF import (slides with locked
-backdrops surviving reload). `npm run test:pwa` adds 2 more tests that build the app
+backdrops surviving reload), private notes and scroll/pause behavior, configurable countdown
+cancellation, recorded-track muting, mobile/tablet layouts and camera touch
+targets, edited export duration/audio tracks, undo/redo, edit copies, export
+failure/cancellation, and lazy media loading/frame-rate limits.
+`npm run test:pwa` adds 2 more tests that build the app
 and verify the manifest and offline shell against `vite preview`.
 
 An earlier end-to-end recording script (draw → camera + mic → record → stop →

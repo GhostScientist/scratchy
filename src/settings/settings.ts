@@ -12,6 +12,7 @@ export interface AppSettings {
   handedness: Handedness;
   /** Recording preset id (see recording/presets.ts). */
   presetId: string;
+  countdownSeconds: 0 | 3 | 5 | 10;
 }
 
 const KEY = 'scratchy.settings.v1';
@@ -19,6 +20,7 @@ const KEY = 'scratchy.settings.v1';
 const DEFAULTS: AppSettings = {
   handedness: 'right',
   presetId: 'compat',
+  countdownSeconds: 3,
 };
 
 export function loadSettings(): AppSettings {
@@ -29,6 +31,10 @@ export function loadSettings(): AppSettings {
     return {
       handedness: parsed.handedness === 'left' ? 'left' : 'right',
       presetId: typeof parsed.presetId === 'string' ? parsed.presetId : DEFAULTS.presetId,
+      countdownSeconds:
+        parsed.countdownSeconds === 0 || parsed.countdownSeconds === 5 || parsed.countdownSeconds === 10
+          ? parsed.countdownSeconds
+          : 3,
     };
   } catch {
     return { ...DEFAULTS };

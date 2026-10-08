@@ -10,6 +10,8 @@ import {
   PauseIcon,
   PlayIcon,
   UploadIcon,
+  NotesIcon,
+  FitIcon,
 } from './icons';
 
 export function formatDuration(ms: number): string {
@@ -35,6 +37,7 @@ interface TopBarProps {
   micEnabled: boolean;
   micMuted: boolean;
   onMic(): void;
+  micLocked: boolean;
   cameraEnabled: boolean;
   cameraVisible: boolean;
   onCamera(): void;
@@ -48,29 +51,52 @@ interface TopBarProps {
   onRecord(): void;
   onCancelCountdown(): void;
   onStop(): void;
+  notesOpen: boolean;
+  onNotes(): void;
+  focused: boolean;
+  onFocus(): void;
 }
 
 export function TopBar(props: TopBarProps) {
   const [confirmStop, setConfirmStop] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const actionsRef = useRef<HTMLDivElement>(null);
+  const [moreOpen, setMoreOpen] = useState(false);
   const { phase } = props;
   const recordingActive = phase === 'recording' || phase === 'paused' || phase === 'stopping';
+  const mediaActive = recordingActive || phase === 'countdown';
 
   useEffect(() => {
     if (phase !== 'recording' && phase !== 'paused') setConfirmStop(false);
   }, [phase]);
 
-  const micLabel = !props.micEnabled
+  useEffect(() => {
+    if (!moreOpen) return;
+    const onOutside = (e: PointerEvent) => {
+      if (!actionsRef.current?.contains(e.target as Node)) setMoreOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setMoreOpen(false);
+    };
+    document.addEventListener('pointerdown', onOutside, true);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('pointerdown', onOutside, true);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [moreOpen]);
+
+  const micLabel = props.micLocked ? 'Microphone must be enabled before recording' : !props.micEnabled
     ? 'Enable microphone (M)'
     : props.micMuted
       ? 'Unmute microphone (M)'
-      : recordingActive
+      : mediaActive
         ? 'Mute microphone (M)'
         : 'Turn microphone off (M)';
 
   const cameraLabel = !props.cameraEnabled
     ? 'Enable camera (C)'
-    : recordingActive
+    : mediaActive
       ? props.cameraVisible
         ? 'Hide camera (C)'
         : 'Show camera (C)'
@@ -92,70 +118,87 @@ export function TopBar(props: TopBarProps) {
         maxLength={80}
       />
 
-      <div className="top-actions">
-        {props.onImportFiles && (
-          <>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/*,application/pdf"
-              multiple
-              hidden
-              onChange={(e) => {
-                const files = [...(e.target.files ?? [])];
-                // Allow re-picking the same file later.
-                e.target.value = '';
-                if (files.length > 0) props.onImportFiles?.(files);
-              }}
-            />
+      <div className="top-actions" ref={actionsRef}>
+        <button type="button" className="pill more-controls" aria-label="More controls"
+          aria-expanded={moreOpen} aria-controls="board-actions"
+          onClick={() => setMoreOpen(!moreOpen)}><span aria-hidden="true">•••</span></button>
+        <div id="board-actions" className={`board-actions${moreOpen ? ' open' : ''}`}>
+          <input className="mobile-title-input" value={props.title}
+            onChange={(e) => props.onTitle(e.target.value)} aria-label="Lesson title"
+            spellCheck={false} maxLength={80} />
+          {props.onImportFiles && (
+            <>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*,application/pdf"
+                multiple
+                hidden
+                onChange={(e) => {
+                  const files = [...(e.target.files ?? [])];
+                  // Allow re-picking the same file later.
+                  e.target.value = '';
+                  if (files.length > 0) props.onImportFiles?.(files);
+                }}
+              />
+              <button
+                type="button"
+                className="pill import-pill"
+                aria-label="Import image or PDF"
+                title="Import image or PDF"
+                onClick={() => fileInputRef.current?.click()}
+              >
+                <UploadIcon />
+              </button>
+            </>
+          )}
+          {props.settingsSlot}
+          {props.exportSlot}
+          {props.onLibrary && (
             <button
               type="button"
-              className="pill import-pill"
-              aria-label="Import image or PDF"
-              title="Import image or PDF"
-              onClick={() => fileInputRef.current?.click()}
+              className="pill library-pill"
+              aria-label="Saved takes"
+              title="Saved takes"
+              disabled={mediaActive}
+              onClick={props.onLibrary}
             >
-              <UploadIcon />
+              <LibraryIcon />
             </button>
-          </>
-        )}
-        {props.settingsSlot}
-        {props.exportSlot}
-        {props.onLibrary && (
+          )}
           <button
             type="button"
-            className="pill library-pill"
-            aria-label="Saved takes"
-            title="Saved takes"
-            onClick={props.onLibrary}
+            className={`pill${props.micEnabled && !props.micMuted ? ' active' : ''}${props.micMuted ? ' muted' : ''}`}
+            aria-label={micLabel}
+            title={micLabel}
+            onClick={props.onMic}
+            disabled={props.micLocked}
           >
-            <LibraryIcon />
+            {props.micEnabled && !props.micMuted ? <MicIcon /> : <MicOffIcon />}
+            <span className="level" aria-hidden="true">
+              <span className="level-fill" />
+            </span>
           </button>
-        )}
-        <button
-          type="button"
-          className={`pill${props.micEnabled && !props.micMuted ? ' active' : ''}${props.micMuted ? ' muted' : ''}`}
-          aria-label={micLabel}
-          title={micLabel}
-          onClick={props.onMic}
-        >
-          {props.micEnabled && !props.micMuted ? <MicIcon /> : <MicOffIcon />}
-          <span className="level" aria-hidden="true">
-            <span className="level-fill" />
-          </span>
-        </button>
 
-        <button
-          type="button"
-          className={`pill${props.cameraEnabled && props.cameraVisible ? ' active' : ''}`}
-          aria-label={cameraLabel}
-          title={cameraLabel}
-          onClick={props.onCamera}
-        >
-          {props.cameraEnabled && props.cameraVisible ? <CameraIcon /> : <CameraOffIcon />}
-        </button>
+          <button
+            type="button"
+            className={`pill${props.cameraEnabled && props.cameraVisible ? ' active' : ''}`}
+            aria-label={cameraLabel}
+            title={cameraLabel}
+            onClick={props.onCamera}
+          >
+            {props.cameraEnabled && props.cameraVisible ? <CameraIcon /> : <CameraOffIcon />}
+          </button>
+        </div>
+        <button type="button" className={`pill notes-pill${props.notesOpen ? ' active' : ''}`}
+          aria-label="Presenter notes" title="Presenter notes" aria-pressed={props.notesOpen}
+          onClick={props.onNotes}><NotesIcon /></button>
+        <button type="button" className={`pill focus-pill${props.focused ? ' active' : ''}`}
+          aria-label={props.focused ? 'Exit focus mode' : 'Enter focus mode'}
+          title={props.focused ? 'Exit focus mode' : 'Enter focus mode'}
+          aria-pressed={props.focused} onClick={props.onFocus}><FitIcon /></button>
 
-        <div className="record-cluster">
+        <div className={`record-cluster${phase === 'paused' ? ' is-paused' : ''}`}>
           {(phase === 'idle' || phase === 'complete') && (
             <button
               type="button"
@@ -180,8 +223,10 @@ export function TopBar(props: TopBarProps) {
           )}
           {recordingActive && (
             <>
-              {phase === 'paused' ? (
-                <span className="paused-label">Paused</span>
+              {phase === 'stopping' ? (
+                <span className="paused-label" role="status">Preparing…</span>
+              ) : phase === 'paused' ? (
+                <span className="paused-label" role="status">Paused</span>
               ) : (
                 <span className="rec-live" aria-hidden="true" />
               )}

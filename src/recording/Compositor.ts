@@ -37,6 +37,7 @@ export class Compositor {
   private running = false;
   private track: MediaStreamTrack | null = null;
   private crop: OutputCrop;
+  private lastFrame = -Infinity;
 
   constructor(
     private sources: CompositorSources,
@@ -72,13 +73,16 @@ export class Compositor {
     return stream;
   }
 
-  private frame = (): void => {
+  private frame = (now = performance.now()): void => {
     if (!this.running) return;
-    this.draw();
-    // Belt and braces: some engines only emit captureStream frames when the
-    // canvas is painted; requestFrame forces delivery even for a static board.
-    if (this.track && 'requestFrame' in this.track) {
-      (this.track as CanvasCaptureMediaStreamTrack).requestFrame();
+    if (now - this.lastFrame >= 1000 / this.preset.fps - 1) {
+      this.lastFrame = now;
+      this.draw();
+      // Belt and braces: some engines only emit captureStream frames when the
+      // canvas is painted; requestFrame forces delivery even for a static board.
+      if (this.track && 'requestFrame' in this.track) {
+        (this.track as CanvasCaptureMediaStreamTrack).requestFrame();
+      }
     }
     this.raf = requestAnimationFrame(this.frame);
   };

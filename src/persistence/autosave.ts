@@ -7,6 +7,7 @@ const KEY_V1 = 'scratchy.lesson.v1';
 export interface SavedLesson {
   version: 2;
   title: string;
+  presenterNotes?: string;
   background: BackgroundKind;
   tool: Tool;
   color: string;

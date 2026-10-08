@@ -1,14 +1,3 @@
-import {
-  ALL_FORMATS,
-  BlobSource,
-  BufferTarget,
-  Conversion,
-  Input,
-  Mp4OutputFormat,
-  Output,
-  WebMOutputFormat,
-} from 'mediabunny';
-
 export interface DeliverableTake {
   blob: Blob;
   mimeType: string;
@@ -34,19 +23,25 @@ const MP4_VIDEO_CODECS = new Set(['avc', 'hevc']);
  * bytes so a remux bug can never lose a recording.
  */
 export async function remuxForDelivery(blob: Blob): Promise<DeliverableTake | null> {
+  let input: import('mediabunny').Input | undefined;
   try {
-    const input = new Input({ source: new BlobSource(blob), formats: ALL_FORMATS });
+    const {
+      ALL_FORMATS, BlobSource, BufferTarget, Conversion, Input,
+      Mp4OutputFormat, Output, WebMOutputFormat,
+    } = await import('mediabunny');
+    input = new Input({ source: new BlobSource(blob), formats: ALL_FORMATS });
     const videoTrack = await input.getPrimaryVideoTrack();
     if (!videoTrack) return null;
     const codec = videoTrack.codec;
     if (!codec) return null;
 
     const toMp4 = MP4_VIDEO_CODECS.has(codec);
+    const target = new BufferTarget();
     const output = new Output({
       format: toMp4
         ? new Mp4OutputFormat({ fastStart: 'in-memory' })
         : new WebMOutputFormat(),
-      target: new BufferTarget(),
+      target,
     });
 
     const conversion = await Conversion.init({ input, output, showWarnings: false });
@@ -55,7 +50,7 @@ export async function remuxForDelivery(blob: Blob): Promise<DeliverableTake | nu
     if (conversion.discardedTracks.some((t) => t.track.type === 'video')) return null;
     await conversion.execute();
 
-    const buffer = (output.target as BufferTarget).buffer;
+    const buffer = target.buffer;
     if (!buffer || buffer.byteLength === 0) return null;
     const mimeType = toMp4 ? 'video/mp4' : 'video/webm';
     return {
@@ -65,5 +60,7 @@ export async function remuxForDelivery(blob: Blob): Promise<DeliverableTake | nu
     };
   } catch {
     return null;
+  } finally {
+    input?.dispose();
   }
 }
