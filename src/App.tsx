@@ -18,6 +18,7 @@ import type { CompositorSources } from './recording/Compositor';
 import { PreviewModal } from './recording/PreviewModal';
 import { Toolbar } from './ui/Toolbar';
 import { TopBar } from './ui/TopBar';
+import { PresenterNotes } from './ui/PresenterNotes';
 import { Countdown } from './ui/Countdown';
 import { Minimap } from './ui/Minimap';
 import { ZoomControls, zoomToFit } from './ui/ZoomControls';
@@ -101,6 +102,9 @@ export default function App() {
   const [textEdit, setTextEdit] = useState<TextEditRequest | null>(null);
   const [background, setBackground] = useState<BackgroundKind>('white');
   const [title, setTitle] = useState('Untitled lesson');
+  const [presenterNotes, setPresenterNotes] = useState('');
+  const [notesOpen, setNotesOpen] = useState(false);
+  const [focused, setFocused] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [history, setHistory] = useState({ undo: false, redo: false });
   const [hasInk, setHasInk] = useState(false);
@@ -140,6 +144,9 @@ export default function App() {
   const [pdfProgress, setPdfProgress] = useState<{ done: number; total: number } | null>(null);
   const [takesOpen, setTakesOpen] = useState(false);
   const [takes, setTakes] = useState<StoredTake[]>([]);
+  const [libraryEditor, setLibraryEditor] = useState<{
+    take: Take; boardId: string; title: string;
+  } | null>(null);
   const [storageEstimate, setStorageEstimate] = useState<{ usage: number; quota: number } | null>(
     null,
   );
@@ -186,8 +193,8 @@ export default function App() {
   // Snapshot of render state for frame-rate consumers (compositor, autosave).
   const stateRef = useRef({ background, cameraEnabled: camera.enabled, cameraVisible });
   stateRef.current = { background, cameraEnabled: camera.enabled, cameraVisible };
-  const lessonRef = useRef({ title, background, tool, color, width });
-  lessonRef.current = { title, background, tool, color, width };
+  const lessonRef = useRef({ title, presenterNotes, background, tool, color, width });
+  lessonRef.current = { title, presenterNotes, background, tool, color, width };
 
   useEffect(() => {
     cameraLayoutRef.current = cameraLayout;
@@ -336,7 +343,7 @@ export default function App() {
 
   useEffect(() => {
     scheduleSave();
-  }, [title, background, tool, color, width, cameraLayout, scheduleSave]);
+  }, [title, presenterNotes, background, tool, color, width, cameraLayout, scheduleSave]);
 
   useEffect(() => () => window.clearTimeout(saveTimer.current), []);
 
@@ -345,6 +352,7 @@ export default function App() {
   const applyLesson = useCallback(
     (saved: Omit<SavedLesson, 'version'>, engine: InkEngine, viewport: Viewport) => {
       setTitle(saved.title);
+      setPresenterNotes(saved.presenterNotes ?? '');
       setBackground(saved.background);
       setTool(saved.tool);
       setColor(saved.color);
@@ -364,6 +372,7 @@ export default function App() {
   const applyBoard = useCallback(
     (board: SavedBoard, engine: InkEngine, viewport: Viewport) => {
       setTitle(board.title);
+      setPresenterNotes(board.presenterNotes ?? '');
       setBackground(board.background);
       setTool(board.tool);
       setColor(board.color);
@@ -728,10 +737,12 @@ export default function App() {
   importFilesRef.current = handleImportFiles;
   useEffect(() => {
     const onPaste = (e: ClipboardEvent) => {
-      const target = e.target as HTMLElement | null;
+      if (document.querySelector('[aria-modal="true"]')) return;
+      const target = e.target instanceof HTMLElement ? e.target : null;
       if (
         target &&
-        (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
+        (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable ||
+          target.closest('.presenter-notes'))
       ) {
         return;
       }
@@ -799,6 +810,30 @@ export default function App() {
     [refreshTakes],
   );
 
+  const handleEditLibraryTake = useCallback(async (stored: StoredTake) => {
+    const storedVersion = stored.seekable ? (stored.deliveryVersion ?? 1) : 0;
+    const fixed = storedVersion < DELIVERY_VERSION ? await remuxForDelivery(stored.blob) : null;
+    const blob = fixed?.blob ?? stored.blob;
+    setLibraryEditor({
+      boardId: stored.boardId,
+      title: stored.title,
+      take: {
+        ...stored, blob, mimeType: fixed?.mimeType ?? stored.mimeType,
+        extension: fixed?.extension ?? stored.extension,
+        seekable: stored.seekable || fixed !== null,
+        deliveryVersion: fixed ? DELIVERY_VERSION : storedVersion,
+        url: URL.createObjectURL(blob),
+      },
+    });
+  }, []);
+  const closeLibraryEditor = useCallback(() => {
+    setLibraryEditor(null);
+  }, []);
+  useEffect(() => {
+    const url = libraryEditor?.take.url;
+    return () => { if (url) URL.revokeObjectURL(url); };
+  }, [libraryEditor?.take.url]);
+
   // ---- stage scaling -----------------------------------------------------------
 
   // Layout effect: the first paint must already be scaled — the stage's
@@ -808,7 +843,7 @@ export default function App() {
     const el = fitRef.current;
     if (!el) return;
     const update = (w: number, h: number) => {
-      const s = clamp(Math.min(w / stageSize.w, h / stageSize.h), 0.15, 2.5);
+      const s = clamp(Math.min(w / stageSize.w, h / stageSize.h), 0.01, 2.5);
       scaleRef.current = s;
       setScale(s);
     };
@@ -856,7 +891,10 @@ export default function App() {
     () => ({ boardId: boardIdRef.current, title: lessonRef.current.title }),
     [],
   );
-  const recorder = useRecorder(sources, getMicStream, getRecordingSetup, getSessionMeta, pushToast);
+  const recorder = useRecorder(
+    sources, getMicStream, getRecordingSetup, getSessionMeta, pushToast,
+    settings.countdownSeconds, mic.muted,
+  );
 
   // ---- crash recovery --------------------------------------------------------
 
@@ -913,7 +951,7 @@ export default function App() {
     });
   }, []);
 
-  const handleSaveRecovered = useCallback(async (): Promise<boolean> => {
+  const handleSaveRecovered = useCallback(async (take: Take): Promise<boolean> => {
     if (!recovered) return false;
     const boardId = recovered.boardId ?? boardIdRef.current;
     if (!boardId) return false;
@@ -921,31 +959,31 @@ export default function App() {
       id: nextId('t'),
       boardId,
       title: lessonRef.current.title,
-      blob: recovered.take.blob,
-      mimeType: recovered.take.mimeType,
-      extension: recovered.take.extension,
-      durationMs: recovered.take.durationMs,
-      createdAt: recovered.take.createdAt,
-      seekable: recovered.take.seekable,
-      deliveryVersion: recovered.take.seekable ? DELIVERY_VERSION : 0,
+      blob: take.blob,
+      mimeType: take.mimeType,
+      extension: take.extension,
+      durationMs: take.durationMs,
+      createdAt: take.createdAt,
+      seekable: take.seekable,
+      deliveryVersion: take.deliveryVersion ?? (take.seekable ? DELIVERY_VERSION : 0),
     });
   }, [recovered]);
 
   const recorderTake = recorder.take;
-  const handleSaveTake = useCallback(async (): Promise<boolean> => {
+  const handleSaveTake = useCallback(async (take: Take): Promise<boolean> => {
     const boardId = boardIdRef.current;
     if (!recorderTake || !boardId) return false;
     return saveTake({
       id: nextId('t'),
       boardId,
       title: lessonRef.current.title,
-      blob: recorderTake.blob,
-      mimeType: recorderTake.mimeType,
-      extension: recorderTake.extension,
-      durationMs: recorderTake.durationMs,
-      createdAt: recorderTake.createdAt,
-      seekable: recorderTake.seekable,
-      deliveryVersion: recorderTake.seekable ? DELIVERY_VERSION : 0,
+      blob: take.blob,
+      mimeType: take.mimeType,
+      extension: take.extension,
+      durationMs: take.durationMs,
+      createdAt: take.createdAt,
+      seekable: take.seekable,
+      deliveryVersion: take.deliveryVersion ?? (take.seekable ? DELIVERY_VERSION : 0),
     });
   }, [recorderTake]);
 
@@ -1051,6 +1089,7 @@ export default function App() {
   const tabHintShown = useRef(false);
   const handleRecord = () => {
     if (recorder.phase !== 'idle' || probing) return;
+    if (matchMedia('(max-width: 1024px), (pointer: coarse)').matches) setFocused(true);
     void (async () => {
       // Gate recording behind the capability probe — cached after the first
       // pass, so this is instant on every later take.
@@ -1094,6 +1133,7 @@ export default function App() {
         pushToast('Keep this tab visible while recording.');
       }
       setCollapsed(true);
+      setTakesOpen(false);
       recorder.start();
     })();
   };
@@ -1174,6 +1214,10 @@ export default function App() {
 
   const handleMicButton = () => {
     if (!mic.enabled) {
+      if (recorder.phase === 'recording' || recorder.phase === 'paused' || recorder.phase === 'stopping') {
+        pushToast('Enable the microphone before starting a take. This recording has no audio track.');
+        return;
+      }
       void mic.enable();
       return;
     }
@@ -1230,6 +1274,10 @@ export default function App() {
     mic: handleMicButton,
     recorderPhase: recorder.phase,
     pauseResume: () => {
+      if (!pauseReliable) {
+        pushToast('Pause is unavailable on this browser. The recording is still running.');
+        return;
+      }
       if (recorder.phase === 'recording') recorder.pause();
       else if (recorder.phase === 'paused') recorder.resume();
     },
@@ -1238,10 +1286,17 @@ export default function App() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement | null;
+      const target = e.target instanceof HTMLElement ? e.target : null;
+      if (document.querySelector('[aria-modal="true"]')) return;
+      if (e.key === 'Escape' && keyActionsRef.current.recorderPhase === 'countdown') {
+        e.preventDefault();
+        recorderApiRef.current.cancelCountdown();
+        return;
+      }
       if (
         target &&
-        (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
+        (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable ||
+          target.closest('.presenter-notes'))
       ) {
         return;
       }
@@ -1254,6 +1309,7 @@ export default function App() {
       }
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.code === 'Space') {
+        if (target?.closest('button, a, select, summary')) return;
         e.preventDefault();
         const phase = keyActionsRef.current.recorderPhase;
         if (phase === 'recording' || phase === 'paused') {
@@ -1360,7 +1416,7 @@ export default function App() {
   const frameCropped = frameCrop.w < stageSize.w || frameCrop.h < stageSize.h;
 
   return (
-    <div className={`app${settings.handedness === 'left' ? ' hand-left' : ''}`}>
+    <div className={`app${settings.handedness === 'left' ? ' hand-left' : ''}${focused ? ' is-focused' : ''}${notesOpen ? ' has-notes' : ''}`}>
       <TopBar
         title={title}
         onTitle={setTitle}
@@ -1394,6 +1450,8 @@ export default function App() {
             deviceChecking={probing}
             onDeviceCheck={handleDeviceCheck}
             onReplayTour={() => setOnboardingOpen(true)}
+            countdownSeconds={settings.countdownSeconds}
+            onCountdown={(countdownSeconds) => updateSettings({ countdownSeconds })}
           />
         }
         onLibrary={activeBoardId ? handleOpenTakes : undefined}
@@ -1403,6 +1461,7 @@ export default function App() {
         onMic={handleMicButton}
         cameraEnabled={camera.enabled}
         cameraVisible={cameraVisible}
+        micLocked={!mic.enabled && recordingActive && recorder.phase !== 'countdown'}
         onCamera={handleCameraButton}
         phase={recorder.phase}
         elapsedMs={recorder.elapsedMs}
@@ -1412,6 +1471,13 @@ export default function App() {
         onRecord={handleRecord}
         onCancelCountdown={recorder.cancelCountdown}
         onStop={recorder.stop}
+        notesOpen={notesOpen}
+        onNotes={() => setNotesOpen((open) => !open)}
+        focused={focused}
+        onFocus={() => {
+          setFocused((value) => !value);
+          setCollapsed(!focused);
+        }}
       />
 
       <main
@@ -1575,10 +1641,15 @@ export default function App() {
           onClear={() => engineRef.current?.clear()}
           onCollapsed={setCollapsed}
         />
+        {notesOpen && (
+          <PresenterNotes key={activeBoardId ?? 'local'} value={presenterNotes} onChange={setPresenterNotes}
+            onClose={() => setNotesOpen(false)} phase={recorder.phase} />
+        )}
       </main>
 
       {recorder.take && (
         <PreviewModal
+          key={recorder.take.url}
           take={recorder.take}
           title={title}
           onTitle={setTitle}
@@ -1616,6 +1687,7 @@ export default function App() {
 
       {recovered && (
         <PreviewModal
+          key={recovered.take.url}
           take={recovered.take}
           title={title}
           onTitle={setTitle}
@@ -1634,7 +1706,25 @@ export default function App() {
           estimate={storageEstimate}
           onClose={() => setTakesOpen(false)}
           onDelete={(id) => void handleDeleteTake(id)}
+          onEdit={(take) => void handleEditLibraryTake(take)}
         />
+      )}
+      {libraryEditor && (
+        <PreviewModal key={libraryEditor.take.url} take={libraryEditor.take}
+          copy title={libraryEditor.title}
+          onTitle={(value) => setLibraryEditor((current) => current ? { ...current, title: value } : current)}
+          onClose={closeLibraryEditor} onDelete={closeLibraryEditor}
+          onSaveToLibrary={async (take) => {
+            const ok = await saveTake({
+              id: nextId('t'), boardId: libraryEditor.boardId,
+              title: libraryEditor.title, blob: take.blob, mimeType: take.mimeType,
+              extension: take.extension, durationMs: take.durationMs,
+              createdAt: Date.now(), seekable: take.seekable,
+              deliveryVersion: take.deliveryVersion ?? (take.seekable ? DELIVERY_VERSION : 0),
+            });
+            if (ok) void refreshTakes();
+            return ok;
+          }} />
       )}
 
       {pdfProgress && (

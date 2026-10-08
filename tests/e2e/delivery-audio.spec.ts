@@ -78,3 +78,38 @@ test('audio passes through when the compat codec cannot be encoded here', async 
   expect(result!.audioCodec).toBe(canAac ? 'aac' : 'opus');
   expect(result!.duration).toBeGreaterThan(0.9);
 });
+
+for (const [name, mimeType, audioCodec] of [
+  ['h264-opus-frag.mp4', 'video/mp4', 'aac'],
+  ['vp9-flac.mkv', 'video/webm', 'opus'],
+] as const) {
+  test(`edited ${name} uses the current audio delivery rules`, async ({ page }) => {
+    const result = await page.evaluate(async (b64) => {
+      const { editTake } = await import('/src/recording/editTake.ts');
+      const { DELIVERY_VERSION } = await import('/src/recording/remux.ts');
+      const { Input, BlobSource, ALL_FORMATS, canEncodeAudio } = await import('/@id/mediabunny');
+      const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+      const delivered = await editTake({
+        blob: new Blob([bytes]), url: '', mimeType: '', extension: '',
+        durationMs: 1000, createdAt: Date.now(), seekable: true, deliveryVersion: 1,
+      }, { start: 0.1, end: 0.8, muted: false }, new AbortController().signal, () => {});
+      const input = new Input({ source: new BlobSource(delivered.blob), formats: ALL_FORMATS });
+      try {
+        return {
+          mimeType: delivered.mimeType,
+          audioCodec: (await input.getPrimaryAudioTrack())?.codec,
+          duration: await input.getDurationFromMetadata(),
+          version: delivered.deliveryVersion,
+          expectedVersion: DELIVERY_VERSION,
+          canAac: await canEncodeAudio('aac', { bitrate: 128_000 }),
+        };
+      } finally {
+        input.dispose();
+      }
+    }, fixture(name));
+    expect(result.mimeType).toBe(mimeType);
+    expect(result.audioCodec).toBe(mimeType === 'video/mp4' && !result.canAac ? 'opus' : audioCodec);
+    expect(result.duration).toBeCloseTo(0.7, 2);
+    expect(result.version).toBe(result.expectedVersion);
+  });
+}

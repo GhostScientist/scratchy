@@ -156,6 +156,8 @@ export interface Take {
    *  real duration (recording/remux.ts). Absent/false = raw MediaRecorder
    *  bytes, healed lazily when opened from the library. */
   seekable?: boolean;
+  /** Delivery pipeline version, retained when editing a saved take. */
+  deliveryVersion?: number;
 }
 
 export const CAMERA_MIN_WIDTH = 140;

@@ -283,6 +283,7 @@ test.describe('portrait phone', () => {
   test('the camera bubble is re-clamped into the stage after rotation', async ({ page }) => {
     await seed(page);
     await openApp(page);
+    await page.getByRole('button', { name: 'More controls' }).click();
     await page.getByRole('button', { name: 'Enable camera (C)' }).click();
     await expect(page.locator('.camera-overlay')).toBeVisible({ timeout: 10_000 });
 

@@ -11,6 +11,7 @@ interface TakesDrawerProps {
   estimate: { usage: number; quota: number } | null;
   onClose(): void;
   onDelete(id: string): void;
+  onEdit(take: StoredTake): void;
 }
 
 function mb(bytes: number): string {
@@ -27,7 +28,9 @@ function stamp(createdAt: number): string {
 }
 
 /** One take row; the blob only becomes an object URL while expanded. */
-function TakeRow({ take, onDelete }: { take: StoredTake; onDelete(): void }) {
+function TakeRow({ take, onDelete, onEdit }: {
+  take: StoredTake; onDelete(): void; onEdit(): void;
+}) {
   const [open, setOpen] = useState(false);
   const [media, setMedia] = useState<{ url: string; filename: string } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -89,6 +92,7 @@ function TakeRow({ take, onDelete }: { take: StoredTake; onDelete(): void }) {
         <>
           <video className="take-video" src={media.url} controls playsInline />
           <div className="take-actions">
+            <button type="button" className="btn ghost small" onClick={onEdit}>Edit a copy</button>
             <a className="btn ghost small" href={media.url} download={media.filename}>
               <DownloadIcon />
               Download
@@ -137,7 +141,8 @@ export function TakesDrawer(props: TakesDrawerProps) {
       ) : (
         <div className="takes-list">
           {props.takes.map((take) => (
-            <TakeRow key={take.id} take={take} onDelete={() => props.onDelete(take.id)} />
+            <TakeRow key={take.id} take={take} onDelete={() => props.onDelete(take.id)}
+              onEdit={() => props.onEdit(take)} />
           ))}
         </div>
       )}

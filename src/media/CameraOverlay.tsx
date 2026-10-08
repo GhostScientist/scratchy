@@ -155,7 +155,15 @@ export function CameraOverlay(props: CameraOverlayProps) {
   );
 
   const { layout, recording } = props;
-  const controlsBelow = layout.y + layout.height + 60 <= props.stage.h;
+  const scale = props.scaleRef.current;
+  const controlsWidth = Math.min(300, props.stage.w * scale - 16);
+  const controlsHeight = controlsWidth < 300 ? 104 : 58;
+  const controlsCenter = clamp(
+    layout.x + layout.width / 2,
+    (controlsWidth / 2 + 8) / scale,
+    props.stage.w - (controlsWidth / 2 + 8) / scale,
+  ) - layout.x;
+  const controlsBelow = layout.y + layout.height + (controlsHeight + 12) / scale <= props.stage.h;
   const cutoutLive = layout.shape === 'cutout' && props.cutoutState === 'ready';
   const cutoutLoading = layout.shape === 'cutout' && props.cutoutState === 'loading';
 
@@ -199,11 +207,18 @@ export function CameraOverlay(props: CameraOverlayProps) {
         <>
           <div
             className="cam-handle"
+            style={{ width: 44 / scale, height: 44 / scale, right: 0, bottom: 0 }}
             onPointerDown={(e) => startGesture(e, 'resize')}
             aria-hidden="true"
           />
           <div
             className={`cam-controls ${controlsBelow ? 'below' : 'above'}`}
+            style={{
+              left: controlsCenter,
+              width: controlsWidth,
+              transform: `scale(${1 / scale}) translateX(-50%)`,
+              transformOrigin: controlsBelow ? 'top center' : 'bottom center',
+            }}
             onPointerDown={(e) => e.stopPropagation()}
           >
             {SHAPES.map(({ shape, label, Icon }) => {

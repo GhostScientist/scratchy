@@ -1,16 +1,4 @@
-import {
-  ALL_FORMATS,
-  BlobSource,
-  BufferTarget,
-  canEncodeAudio,
-  Conversion,
-  Input,
-  Mp4OutputFormat,
-  Output,
-  WebMOutputFormat,
-} from 'mediabunny';
-import type { AudioCodec, ConversionAudioOptions } from 'mediabunny';
-
+import type { AudioCodec, ConversionAudioOptions, Input } from 'mediabunny';
 export interface DeliverableTake {
   blob: Blob;
   mimeType: string;
@@ -62,22 +50,28 @@ const AUDIO_TRANSCODE_BITRATE = 128_000;
  * bytes so a remux bug can never lose a recording.
  */
 export async function remuxForDelivery(blob: Blob): Promise<DeliverableTake | null> {
+  let input: Input | undefined;
   try {
-    const input = new Input({ source: new BlobSource(blob), formats: ALL_FORMATS });
+    const {
+      ALL_FORMATS, BlobSource, BufferTarget, Conversion, Input,
+      Mp4OutputFormat, Output, WebMOutputFormat,
+    } = await import('mediabunny');
+    input = new Input({ source: new BlobSource(blob), formats: ALL_FORMATS });
     const videoTrack = await input.getPrimaryVideoTrack();
     if (!videoTrack) return null;
     const codec = videoTrack.codec;
     if (!codec) return null;
 
     const toMp4 = MP4_VIDEO_CODECS.has(codec);
+    const target = new BufferTarget();
     const output = new Output({
       format: toMp4
         ? new Mp4OutputFormat({ fastStart: 'in-memory' })
         : new WebMOutputFormat(),
-      target: new BufferTarget(),
+      target,
     });
 
-    const audio = await audioOptions(input, toMp4);
+    const audio = await deliveryAudioOptions(input, toMp4);
     const conversion = await Conversion.init({ input, output, audio, showWarnings: false });
     // A conversion that would drop any track — undecodable video, or audio
     // the container rejects — is worse than the original bytes: bail to the
@@ -85,7 +79,7 @@ export async function remuxForDelivery(blob: Blob): Promise<DeliverableTake | nu
     if (conversion.discardedTracks.length > 0) return null;
     await conversion.execute();
 
-    const buffer = (output.target as BufferTarget).buffer;
+    const buffer = target.buffer;
     if (!buffer || buffer.byteLength === 0) return null;
     const mimeType = toMp4 ? 'video/mp4' : 'video/webm';
     return {
@@ -95,6 +89,8 @@ export async function remuxForDelivery(blob: Blob): Promise<DeliverableTake | nu
     };
   } catch {
     return null;
+  } finally {
+    input?.dispose();
   }
 }
 
@@ -104,7 +100,7 @@ export async function remuxForDelivery(blob: Blob): Promise<DeliverableTake | nu
  *  browser can't encode the target codec (passthrough is then still the best
  *  available delivery — WebM-incompatible passthrough surfaces as a
  *  discarded track and falls back to the raw bytes). */
-async function audioOptions(
+export async function deliveryAudioOptions(
   input: Input,
   toMp4: boolean,
 ): Promise<ConversionAudioOptions | undefined> {
@@ -113,6 +109,7 @@ async function audioOptions(
   if (!audioCodec) return undefined;
   if (toMp4 ? MP4_COMPAT_AUDIO.has(audioCodec) : WEBM_AUDIO.has(audioCodec)) return undefined;
   const target: AudioCodec = toMp4 ? 'aac' : 'opus';
+  const { canEncodeAudio } = await import('mediabunny');
   if (!(await canEncodeAudio(target, { bitrate: AUDIO_TRANSCODE_BITRATE }))) return undefined;
   return { codec: target, bitrate: AUDIO_TRANSCODE_BITRATE };
 }

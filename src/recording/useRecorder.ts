@@ -48,12 +48,16 @@ export function useRecorder(
   getRecordingSetup: () => RecordingSetup,
   getSessionMeta: () => { boardId: string | null; title: string },
   onWarning?: (message: string) => void,
+  countdownSeconds = COUNTDOWN_SECONDS,
+  micMuted = false,
 ): RecorderApi {
   const [phase, setPhase] = useState<RecorderPhase>('idle');
   const [countdownValue, setCountdownValue] = useState(COUNTDOWN_SECONDS);
   const [elapsedMs, setElapsedMs] = useState(0);
   const [take, setTake] = useState<Take | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const phaseRef = useRef<RecorderPhase>('idle');
+  phaseRef.current = phase;
 
   const sourcesRef = useRef(sources);
   sourcesRef.current = sources;
@@ -187,7 +191,10 @@ export function useRecorder(
       };
       setTake(newTake);
       setPhase('complete');
-    })();
+    })().catch((err: unknown) => {
+      setError(`Could not prepare the preview: ${err instanceof Error ? err.message : String(err)}. Reload to recover the captured chunks.`);
+      setPhase('idle');
+    });
   }, [teardownCapture]);
 
   const failRecording = useCallback(
@@ -351,14 +358,14 @@ export function useRecorder(
   failoverRef.current = attemptFormatFailover;
 
   const start = useCallback(() => {
-    setPhase((current) => {
-      if (current !== 'idle') return current;
+    if (phaseRef.current !== 'idle') return;
+    try {
       const format = negotiateFormat();
       if (!format) {
         setError(
           "This browser can't record video (no supported recording format). Try a current version of Chrome, Edge, or Safari.",
         );
-        return current;
+        return;
       }
       formatRef.current = format;
       // Fresh compositor per take — its canvas is sized by the preset, and
@@ -369,10 +376,17 @@ export function useRecorder(
       compositorRef.current?.stop();
       compositorRef.current = new Compositor(sourcesRef.current, preset, stage);
       compositorRef.current.start();
-      setCountdownValue(COUNTDOWN_SECONDS);
-      let remaining = COUNTDOWN_SECONDS;
+      phaseRef.current = 'countdown';
+      setPhase('countdown');
+      setCountdownValue(countdownSeconds);
+      let remaining = countdownSeconds;
       window.clearInterval(countdownTimerRef.current);
+      if (remaining === 0) {
+        beginRecording();
+        return;
+      }
       countdownTimerRef.current = window.setInterval(() => {
+        if (phaseRef.current !== 'countdown') return;
         remaining -= 1;
         if (remaining <= 0) {
           window.clearInterval(countdownTimerRef.current);
@@ -381,14 +395,18 @@ export function useRecorder(
           setCountdownValue(remaining);
         }
       }, 1000);
-      return 'countdown';
-    });
-  }, [beginRecording]);
+    } catch (err) {
+      phaseRef.current = 'idle';
+      failRecording(`Could not prepare recording: ${err instanceof Error ? err.message : String(err)}.`);
+    }
+  }, [beginRecording, countdownSeconds, failRecording]);
 
   const cancelCountdown = useCallback(() => {
+    if (phaseRef.current !== 'countdown') return;
     window.clearInterval(countdownTimerRef.current);
     compositorRef.current?.stop();
-    setPhase((current) => (current === 'countdown' ? 'idle' : current));
+    phaseRef.current = 'idle';
+    setPhase('idle');
   }, []);
 
   const pause = useCallback(() => {
@@ -404,7 +422,8 @@ export function useRecorder(
     try {
       recorder.pause();
     } catch {
-      return; // Pause unsupported here — leave the recording running.
+      warnRef.current?.('This browser could not pause. The recording is still running.');
+      return;
     }
     activeMsRef.current += performance.now() - segmentStartRef.current;
     segmentOpenRef.current = false;
@@ -420,6 +439,7 @@ export function useRecorder(
     try {
       recorder.resume();
     } catch {
+      warnRef.current?.('This browser could not resume. Try again or stop to keep the captured video.');
       return;
     }
     segmentStartRef.current = performance.now();
@@ -475,6 +495,12 @@ export function useRecorder(
     });
     setPhase('idle');
   }, []);
+
+  useEffect(() => {
+    // Clones do not share the source track's enabled flag. Muting only the
+    // meter's stream would otherwise leave the recorded voice audible.
+    streamRef.current?.getAudioTracks().forEach((track) => { track.enabled = !micMuted; });
+  }, [micMuted, phase]);
 
   useEffect(
     () => () => {

@@ -24,6 +24,7 @@ export interface SavedBoard {
   version: 5;
   id: string;
   title: string;
+  presenterNotes?: string;
   background: BackgroundKind;
   tool: Tool;
   color: string;
