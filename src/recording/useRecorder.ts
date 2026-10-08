@@ -9,6 +9,8 @@ import { createRecordingStore } from './RecordingStore';
 import type { RecordingManifest, RecordingStore } from './RecordingStore';
 import { nextId } from '../types';
 import type { StageSize, Take } from '../types';
+import { mixRecordingAudio } from './mixAudio';
+import type { RecordingAudio } from './mixAudio';
 
 /** Everything geometry-dependent a take needs, snapshotted at start() so the
  *  whole recording is immune to rotations and preset changes mid-take. */
@@ -34,6 +36,7 @@ export interface RecorderApi {
   /** Revoke the take's object URL and return to idle. */
   closeTake(): void;
   dismissError(): void;
+  getCanvas(): HTMLCanvasElement | null;
 }
 
 const COUNTDOWN_SECONDS = 3;
@@ -50,6 +53,7 @@ export function useRecorder(
   onWarning?: (message: string) => void,
   countdownSeconds = COUNTDOWN_SECONDS,
   micMuted = false,
+  getSharedStream?: () => MediaStream | null,
 ): RecorderApi {
   const [phase, setPhase] = useState<RecorderPhase>('idle');
   const [countdownValue, setCountdownValue] = useState(COUNTDOWN_SECONDS);
@@ -63,6 +67,12 @@ export function useRecorder(
   sourcesRef.current = sources;
   const getMicRef = useRef(getMicStream);
   getMicRef.current = getMicStream;
+  const getSharedRef = useRef(getSharedStream);
+  getSharedRef.current = getSharedStream;
+  const audioRef = useRef<RecordingAudio | null>(null);
+  const preparationRef = useRef(0);
+  const mutedRef = useRef(micMuted);
+  mutedRef.current = micMuted;
   const getSetupRef = useRef(getRecordingSetup);
   getSetupRef.current = getRecordingSetup;
   const presetRef = useRef<RecordingPreset | null>(null);
@@ -129,6 +139,7 @@ export function useRecorder(
   );
 
   const teardownCapture = useCallback(() => {
+    preparationRef.current += 1;
     window.clearInterval(timerRef.current);
     window.clearTimeout(watchdogRef.current);
     window.clearTimeout(firstChunkTimerRef.current);
@@ -137,6 +148,8 @@ export function useRecorder(
     // them all — ending every track is what makes the encoder flush.
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
+    audioRef.current?.close();
+    audioRef.current = null;
     const recorder = recorderRef.current;
     if (recorder) {
       recorder.ondataavailable = null;
@@ -207,17 +220,19 @@ export function useRecorder(
     [teardownCapture],
   );
 
-  const beginRecording = useCallback(() => {
+  const beginRecording = useCallback(async () => {
+    const preparation = ++preparationRef.current;
     try {
       const compositor = compositorRef.current!;
       const format = formatRef.current!;
       const preset = presetRef.current!;
       const stream = compositor.captureStream(preset.fps);
-      const mic = getMicRef.current();
-      // Clone mic tracks so teardown can stop them without killing the
-      // mic hook's stream for the next take.
-      mic?.getAudioTracks().forEach((t) => stream.addTrack(t.clone()));
       streamRef.current = stream;
+      const audio = await mixRecordingAudio(getMicRef.current(), getSharedRef.current?.() ?? null);
+      if (preparation !== preparationRef.current) { audio.close(); return; }
+      audioRef.current = audio;
+      audio.setMicMuted(mutedRef.current);
+      audio.tracks.forEach((track) => stream.addTrack(track));
 
       let recorder: MediaRecorder;
       try {
@@ -312,6 +327,7 @@ export function useRecorder(
       }, 250);
       setPhase('recording');
     } catch (err) {
+      if (preparation !== preparationRef.current) return;
       const message = err instanceof Error ? err.message : String(err);
       failRecording(`Could not start recording: ${message}. Your lesson is safe.`);
     }
@@ -343,6 +359,8 @@ export function useRecorder(
     recorderRef.current = null;
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
+    audioRef.current?.close();
+    audioRef.current = null;
     const store = storeRef.current;
     const emptySessionId = sessionIdRef.current;
     if (store && emptySessionId) {
@@ -352,7 +370,7 @@ export function useRecorder(
     manifestRef.current = null;
     formatRef.current = next;
     warnRef.current?.('Restarted the recording in a compatible format.');
-    beginRecording();
+    void beginRecording();
     return true;
   }, [beginRecording]);
   failoverRef.current = attemptFormatFailover;
@@ -382,7 +400,7 @@ export function useRecorder(
       let remaining = countdownSeconds;
       window.clearInterval(countdownTimerRef.current);
       if (remaining === 0) {
-        beginRecording();
+        void beginRecording();
         return;
       }
       countdownTimerRef.current = window.setInterval(() => {
@@ -390,7 +408,7 @@ export function useRecorder(
         remaining -= 1;
         if (remaining <= 0) {
           window.clearInterval(countdownTimerRef.current);
-          beginRecording();
+          void beginRecording();
         } else {
           setCountdownValue(remaining);
         }
@@ -404,10 +422,10 @@ export function useRecorder(
   const cancelCountdown = useCallback(() => {
     if (phaseRef.current !== 'countdown') return;
     window.clearInterval(countdownTimerRef.current);
-    compositorRef.current?.stop();
+    teardownCapture();
     phaseRef.current = 'idle';
     setPhase('idle');
-  }, []);
+  }, [teardownCapture]);
 
   const pause = useCallback(() => {
     const recorder = recorderRef.current;
@@ -453,12 +471,19 @@ export function useRecorder(
 
   const stop = useCallback(() => {
     const recorder = recorderRef.current;
-    if (!recorder || recorder.state === 'inactive') return;
+    if (!recorder) {
+      if (phaseRef.current === 'recording' || phaseRef.current === 'paused') {
+        failRecording('Recording stopped before the replacement encoder was ready. No video was captured.');
+      }
+      return;
+    }
+    if (recorder.state === 'inactive') return;
     stoppedElapsedRef.current =
       activeMsRef.current +
       (segmentOpenRef.current ? performance.now() - segmentStartRef.current : 0);
     segmentOpenRef.current = false;
     activeMsRef.current = stoppedElapsedRef.current;
+    compositorRef.current?.stop();
     window.clearInterval(timerRef.current);
     touchManifest('stopping');
     setPhase('stopping');
@@ -480,7 +505,7 @@ export function useRecorder(
     // finalize from the accumulated timeslice chunks if it hasn't fired.
     window.clearTimeout(watchdogRef.current);
     watchdogRef.current = window.setTimeout(finalize, 3000);
-  }, [finalize, touchManifest]);
+  }, [failRecording, finalize, touchManifest]);
 
   const closeTake = useCallback(() => {
     // The take was delivered (downloaded/saved/deleted by the user) — its
@@ -497,9 +522,8 @@ export function useRecorder(
   }, []);
 
   useEffect(() => {
-    // Clones do not share the source track's enabled flag. Muting only the
-    // meter's stream would otherwise leave the recorded voice audible.
-    streamRef.current?.getAudioTracks().forEach((track) => { track.enabled = !micMuted; });
+    // Shared sound stays audible when the presenter mutes their voice.
+    audioRef.current?.setMicMuted(micMuted);
   }, [micMuted, phase]);
 
   useEffect(
@@ -508,6 +532,8 @@ export function useRecorder(
       window.clearInterval(timerRef.current);
       window.clearTimeout(watchdogRef.current);
       compositorRef.current?.stop();
+      preparationRef.current += 1;
+      audioRef.current?.close();
       streamRef.current?.getTracks().forEach((t) => t.stop());
       if (takeRef.current) URL.revokeObjectURL(takeRef.current.url);
     },
@@ -527,5 +553,6 @@ export function useRecorder(
     stop,
     closeTake,
     dismissError: useCallback(() => setError(null), []),
+    getCanvas: useCallback(() => compositorRef.current?.canvas ?? null, []),
   };
 }

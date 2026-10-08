@@ -5,6 +5,37 @@ infinite lesson canvas, place a live webcam bubble over it, record the composed 
 with microphone audio entirely in the browser, then preview and download the video.
 Nothing is ever uploaded.
 
+The studio also has a lightweight **Screen** mode for narrated demos and
+talking-head screencasts. Select it in the top bar (under **More controls** on
+small screens), choose **Share screen**, then enable the camera and microphone
+if desired. Preview and position the camera before pressing **Record**. The
+entire shared source is fitted into a landscape 720p or 1080p video, without
+cropping screen content; the whiteboard and its tools are not included.
+
+**Request shared audio** asks the browser for tab/system sound; availability
+depends on the browser, operating system, selected source, and the audio option
+in the native picker. A notice makes missing audio explicit. Shared sound and
+microphone audio are mixed into one track, and muting the microphone does not
+mute shared sound. Use headphones to avoid microphone feedback.
+
+Where supported (Document Picture-in-Picture, currently desktop Chromium),
+**Floating controls** provides an always-on-top recording preview, timer,
+pause/resume, microphone/camera toggles, and stop controls while working elsewhere.
+Open it before switching away and keep it outside the captured region. Closing
+the panel does not stop a take. In other browsers, keep the studio visible
+alongside the shared window for smooth capture: background/minimized tabs can
+throttle browser compositing. Choosing this app itself, or a display containing
+its preview, can create a hall-of-mirrors effect. Notifications and sensitive
+content visible in the shared source are recorded too.
+
+Ending sharing through the browser automatically finishes the captured take
+(or cancels a pending countdown). Sharing is released after a finished/failed
+take or when returning to the whiteboard. Screen recordings use the same local
+chunk recovery, editor, downloads, and board-associated takes library. Camera
+placement and recording quality in Screen mode are separate from the board.
+The Screen button is disabled, with an explanation on hover or keyboard focus,
+when secure-context, screen-capture, or video-recording APIs are unavailable.
+
 This originally started as an experiment in building things from my phone using /remote-control and /goal against a detailed spec. I dictated the architecture and featurese into a clear PRD, and used this as the /goal for Fable. I expected Fable to succeed, and my expectations were met. Another aspect of this project is towards a signal I'd like to send to the builder community: Agents can help you build incredible things for people for free. These tokens were spent, and even if I don't touch this project again...something of value was created. I do hope people find this useful and valuable. Talking head content can be created on cheap hardware with no installs, and then you just drag and drop the recorded file into whatever platform you want. All for free, and since this is open source: no one can take it away! :)
 
 ## Run it
@@ -194,3 +225,14 @@ Chromium with fake media devices; ffprobe confirmed a 1280×720 video stream
 plus audio. Real-device (iPad/Pencil) verification per spec §10 is still pending,
 in particular pause reliability, installed-PWA recording, and Bluetooth
 audio.
+
+Screen-mode coverage uses synthetic screen streams to verify permission-error
+handling, browser gating and hover/focus notices, uncropped recorded pixels,
+camera compositing and live movement, 720p/1080p output, shared-audio mixing
+and microphone muting, source-ended countdown cancellation/finalization, track
+cleanup, library saves, and floating controls. Native OS capture and Document
+Picture-in-Picture still need real-device checks before a production rollout:
+desktop Chrome/Edge, Firefox, and Safari; OS permission denial/revocation;
+tab/window/display and their audio combinations; switching/minimizing windows;
+and long recordings with recovery and low-storage conditions. Automated floating
+controls coverage uses a popup stand-in, not the native always-on-top window.

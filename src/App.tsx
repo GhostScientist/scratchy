@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { StageCanvas } from './ink/StageCanvas';
 import type { InkEngine, SelectionInfo, TextEditRequest } from './ink/InkEngine';
 import { TextEditorOverlay } from './ui/TextEditorOverlay';
@@ -12,6 +13,10 @@ import { useCamera } from './media/useCamera';
 import { useCutout } from './media/useCutout';
 import type { CutoutFallbackReason } from './media/useCutout';
 import { useMicrophone } from './media/useMicrophone';
+import { useScreenCapture, screenRecordingUnavailable } from './media/useScreenCapture';
+import { ScreenPreview } from './media/ScreenPreview';
+import { useFloatingWindow } from './media/useFloatingWindow';
+import { ScreenStudioPanel, FloatingRecorder } from './ui/ScreenStudioPanel';
 import { useRecorder } from './recording/useRecorder';
 import type { RecorderPhase } from './recording/useRecorder';
 import type { CompositorSources } from './recording/Compositor';
@@ -64,6 +69,7 @@ import { computeBackingScale } from './layout/backing';
 import { useDevicePixelRatio, useStageOrientation } from './layout/useStageOrientation';
 import {
   BACKING_SCALE,
+  LANDSCAPE_STAGE,
   DEFAULT_VIEWPORT,
   blankPage,
   cameraAspectFor,
@@ -105,6 +111,20 @@ export default function App() {
   const [presenterNotes, setPresenterNotes] = useState('');
   const [notesOpen, setNotesOpen] = useState(false);
   const [focused, setFocused] = useState(false);
+  const [screenMode, setScreenMode] = useState(false);
+  const screenModeRef = useRef(screenMode);
+  screenModeRef.current = screenMode;
+  const [screenCameraLayout, setScreenCameraLayout] = useState<CameraLayout>(() => defaultCameraLayout(LANDSCAPE_STAGE));
+  const [screenPresetId, setScreenPresetId] = useState('compat');
+  const [requestedScreenAudio, setRequestedScreenAudio] = useState(false);
+  const [screenReady, setScreenReady] = useState(false);
+  const screenVideoRef = useRef<HTMLVideoElement | null>(null);
+  const screenEndRef = useRef<() => void>(() => {});
+  const screen = useScreenCapture(() => screenEndRef.current());
+  const screenStreamRef = useRef(screen.stream);
+  screenStreamRef.current = screen.stream;
+  const screenReadyRef = useRef(screenReady);
+  screenReadyRef.current = screenReady;
   const [collapsed, setCollapsed] = useState(false);
   const [history, setHistory] = useState({ undo: false, redo: false });
   const [hasInk, setHasInk] = useState(false);
@@ -186,6 +206,10 @@ export default function App() {
   const videoElRef = useRef<HTMLVideoElement | null>(null);
   const scaleRef = useRef(1);
   const cameraLayoutRef = useRef<CameraLayout>(cameraLayout);
+  const activeCameraLayout = screenMode ? screenCameraLayout : cameraLayout;
+  const setActiveCameraLayout = screenMode ? setScreenCameraLayout : setCameraLayout;
+  const screenCameraLayoutRef = useRef(screenCameraLayout);
+  const activeCameraLayoutRef = screenMode ? screenCameraLayoutRef : cameraLayoutRef;
   const fitRef = useRef<HTMLDivElement>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
   micStreamRef.current = mic.stream;
@@ -199,6 +223,9 @@ export default function App() {
   useEffect(() => {
     cameraLayoutRef.current = cameraLayout;
   }, [cameraLayout]);
+  useEffect(() => {
+    screenCameraLayoutRef.current = screenCameraLayout;
+  }, [screenCameraLayout]);
 
   // ---- toasts --------------------------------------------------------------
 
@@ -210,6 +237,7 @@ export default function App() {
       setToasts((ts) => ts.filter((t) => t.id !== id));
     }, 4500);
   }, []);
+  const floating = useFloatingWindow(pushToast);
 
   // ---- camera background removal --------------------------------------------
 
@@ -217,7 +245,7 @@ export default function App() {
   // rounded frame so the camera keeps working without interruption.
   const handleCutoutFallback = useCallback(
     (reason: CutoutFallbackReason) => {
-      setCameraLayout((l) => {
+      setActiveCameraLayout((l) => {
         if (l.shape !== 'cutout') return l;
         const stage = stageSizeRef.current;
         const height = Math.round(l.width * cameraAspectFor('rounded'));
@@ -235,11 +263,11 @@ export default function App() {
           : 'Background removal is unavailable in this browser. Switched back to the rounded camera.',
       );
     },
-    [pushToast],
+    [pushToast, setActiveCameraLayout],
   );
 
   const cutout = useCutout({
-    active: camera.enabled && cameraVisible && cameraLayout.shape === 'cutout',
+    active: camera.enabled && cameraVisible && activeCameraLayout.shape === 'cutout',
     videoElRef,
     onFallback: handleCutoutFallback,
   });
@@ -737,6 +765,7 @@ export default function App() {
   importFilesRef.current = handleImportFiles;
   useEffect(() => {
     const onPaste = (e: ClipboardEvent) => {
+      if (screenModeRef.current) return;
       if (document.querySelector('[aria-modal="true"]')) return;
       const target = e.target instanceof HTMLElement ? e.target : null;
       if (
@@ -854,12 +883,15 @@ export default function App() {
     });
     ro.observe(el);
     return () => ro.disconnect();
-  }, [stageSize]);
+  }, [stageSize, screenMode]);
 
   // ---- recording -----------------------------------------------------------
 
   const sources = useMemo<CompositorSources>(
     () => ({
+      isScreenCapture: () => screenModeRef.current,
+      getScreenVideo: () => screenVideoRef.current,
+      getFrameWindow: () => floating.windowRef.current,
       getBackground: () => stateRef.current.background,
       getInkCanvas: () => engineRef.current?.getInkCanvas() ?? null,
       getActiveElement: () => engineRef.current?.getActiveElement() ?? null,
@@ -873,12 +905,12 @@ export default function App() {
         stateRef.current.cameraEnabled && stateRef.current.cameraVisible
           ? getCutoutCanvas()
           : null,
-      getCameraLayout: () => cameraLayoutRef.current,
+      getCameraLayout: () => screenModeRef.current ? screenCameraLayoutRef.current : cameraLayoutRef.current,
     }),
-    [getCutoutCanvas],
+    [getCutoutCanvas, floating.windowRef],
   );
 
-  const preset = presetById(presetOverride ?? settings.presetId);
+  const preset = presetById(screenMode ? screenPresetId : presetOverride ?? settings.presetId);
   const presetRef = useRef(preset);
   presetRef.current = preset;
   const getRecordingSetup = useCallback(
@@ -887,14 +919,38 @@ export default function App() {
   );
 
   const getMicStream = useCallback(() => micStreamRef.current, []);
+  const getSharedStream = useCallback(() => screenModeRef.current ? screenStreamRef.current : null, []);
   const getSessionMeta = useCallback(
     () => ({ boardId: boardIdRef.current, title: lessonRef.current.title }),
     [],
   );
   const recorder = useRecorder(
     sources, getMicStream, getRecordingSetup, getSessionMeta, pushToast,
-    settings.countdownSeconds, mic.muted,
+    settings.countdownSeconds, mic.muted, getSharedStream,
   );
+  screenEndRef.current = () => {
+    if (recorder.phase === 'countdown') {
+      recorder.cancelCountdown();
+      pushToast('Screen sharing ended. The countdown was cancelled.');
+    } else if (recorder.phase === 'recording' || recorder.phase === 'paused') {
+      recorder.stop();
+      pushToast('Screen sharing ended. Preparing the video captured so far.');
+    } else {
+      pushToast('Screen sharing ended.');
+    }
+  };
+  const previousPhaseRef = useRef(recorder.phase);
+  useEffect(() => {
+    const previous = previousPhaseRef.current;
+    previousPhaseRef.current = recorder.phase;
+    if (!screenMode) return;
+    if (recorder.phase === 'stopping') screen.release();
+    if ((previous === 'recording' || previous === 'paused' || previous === 'stopping' ||
+         previous === 'countdown') && (recorder.phase === 'complete' || recorder.phase === 'idle')) {
+      if (previous !== 'countdown' || recorder.error) screen.release();
+      floating.close();
+    }
+  }, [recorder.phase, recorder.error, screenMode, screen.release, floating.close]);
 
   // ---- crash recovery --------------------------------------------------------
 
@@ -1014,10 +1070,11 @@ export default function App() {
   }, [recorder.phase]);
 
   useEffect(() => {
-    const next = stageSizeFor(rawOrientation);
+    const orientation = screenMode ? 'landscape' : rawOrientation;
+    const next = stageSizeFor(orientation);
     if (recordingActive) {
       if (next.w !== stageSizeRef.current.w) {
-        pendingOrientationRef.current = rawOrientation;
+        pendingOrientationRef.current = orientation;
         if (!lockToastShownRef.current) {
           lockToastShownRef.current = true;
           pushToast('The canvas layout is locked while recording.');
@@ -1028,10 +1085,11 @@ export default function App() {
       return;
     }
     pendingOrientationRef.current = null;
-    if (appliedOrientationRef.current === rawOrientation) return;
-    appliedOrientationRef.current = rawOrientation;
+    if (appliedOrientationRef.current === orientation) return;
+    appliedOrientationRef.current = orientation;
     setStageSize(next);
-    if (rawOrientation === 'portrait') {
+    if (screenMode) return;
+    if (orientation === 'portrait') {
       // Recommend vertical video in portrait (SPEC): auto-select while idle,
       // as a session override the user can undo — the saved preset is
       // untouched. Perf-gated devices keep their preset and get a hint.
@@ -1054,7 +1112,7 @@ export default function App() {
       setPresetOverride(null);
       pushToast(`Recording is back to ${presetById(settingsRef.current.presetId).label}.`);
     }
-  }, [rawOrientation, recordingActive, deviceProfile, pushToast]);
+  }, [rawOrientation, recordingActive, deviceProfile, pushToast, screenMode]);
 
   // DPR-aware display backing, floored so the ink cache always covers the
   // active preset's output resolution. Frozen while a take is running — the
@@ -1067,13 +1125,15 @@ export default function App() {
 
   // Rotation re-clamps the stage-anchored camera bubble into the new bounds.
   useEffect(() => {
-    setCameraLayout((l) => {
+    const desired = stageSizeFor(screenMode ? 'landscape' : rawOrientation);
+    if (desired.w !== stageSize.w) return;
+    setActiveCameraLayout((l) => {
       const next = clampCameraLayout(l, stageSize);
       return next.x === l.x && next.y === l.y && next.width === l.width && next.height === l.height
         ? l
         : next;
     });
-  }, [stageSize]);
+  }, [stageSize, screenMode, rawOrientation, setActiveCameraLayout]);
 
   // DEV hook so e2e tests can poll the recorder without driving the UI.
   const recorderApiRef = useRef(recorder);
@@ -1089,6 +1149,8 @@ export default function App() {
   const tabHintShown = useRef(false);
   const handleRecord = () => {
     if (recorder.phase !== 'idle' || probing) return;
+    if (screenMode && (!screen.stream || !screenReady)) return;
+    const startedInScreenMode = screenMode;
     if (matchMedia('(max-width: 1024px), (pointer: coarse)').matches) setFocused(true);
     void (async () => {
       // Gate recording behind the capability probe — cached after the first
@@ -1101,6 +1163,11 @@ export default function App() {
         return;
       }
       setDeviceProfile(result.profile);
+      if (screenModeRef.current !== startedInScreenMode ||
+          (startedInScreenMode && (!screenStreamRef.current || !screenReadyRef.current))) {
+        pushToast('The shared screen is no longer ready. Choose a screen before recording.');
+        return;
+      }
       if (!result.profile.smokeOk) {
         // Compatibility mode: the smoke test failed but only missing APIs
         // hard-block — let the real recorder be the judge.
@@ -1113,7 +1180,8 @@ export default function App() {
       if (presetRef.current.needsPerformance && !result.profile.supports1080p) {
         presetRef.current = presetById('compat');
         setPresetOverride(null);
-        updateSettings({ presetId: 'compat' });
+        if (startedInScreenMode) setScreenPresetId('compat');
+        else updateSettings({ presetId: 'compat' });
         pushToast('Dropped to 720p because this device failed the 1080p performance check.');
       }
       // SPEC §6.6: check storage headroom before recording, warn — don't block.
@@ -1125,10 +1193,10 @@ export default function App() {
       } catch {
         // Estimate is a nicety only.
       }
-      if (!mic.enabled) {
+      if (!mic.enabled && !screenStreamRef.current?.getAudioTracks().length) {
         pushToast('Recording without the microphone. Tap the mic to add your voice.');
       }
-      if (!tabHintShown.current) {
+      if (!startedInScreenMode && !tabHintShown.current) {
         tabHintShown.current = true;
         pushToast('Keep this tab visible while recording.');
       }
@@ -1162,7 +1230,8 @@ export default function App() {
       setPresetOverride(null);
       const next = presetById(id);
       if (!next.needsPerformance) {
-        updateSettings({ presetId: next.id });
+        if (screenMode) setScreenPresetId(next.id);
+        else updateSettings({ presetId: next.id });
         return;
       }
       // 1080p-class presets are gated on the performance probe (SPEC §6.5).
@@ -1180,13 +1249,14 @@ export default function App() {
           setDeviceProfile(profile);
         }
         if (profile.supports1080p) {
-          updateSettings({ presetId: next.id });
+          if (screenMode) setScreenPresetId(next.id);
+          else updateSettings({ presetId: next.id });
         } else {
           pushToast('This device failed the 1080p performance check, so it stays at 720p.');
         }
       })();
     },
-    [deviceProfile, pushToast, updateSettings],
+    [deviceProfile, pushToast, updateSettings, screenMode],
   );
 
   const deviceSummary = deviceProfile
@@ -1200,6 +1270,11 @@ export default function App() {
   // ---- camera / mic ----------------------------------------------------------
 
   const handleCameraButton = () => {
+    if (screenMode && recordingActive && !camera.enabled) {
+      void camera.enable();
+      setCameraVisible(true);
+      return;
+    }
     if (recordingActive) {
       setCameraVisible((v) => !v);
       return;
@@ -1229,7 +1304,7 @@ export default function App() {
   };
 
   const handleShape = (shape: CameraShape) => {
-    setCameraLayout((l) => {
+    setActiveCameraLayout((l) => {
       const stage = stageSizeRef.current;
       const aspect = cameraAspectFor(shape);
       const next: CameraLayout = { ...l, shape, height: Math.round(l.width * aspect) };
@@ -1238,6 +1313,13 @@ export default function App() {
       return next;
     });
   };
+
+  useEffect(() => {
+    if (screen.error) {
+      pushToast(screen.error);
+      screen.clearError();
+    }
+  }, [screen.error, screen.clearError, pushToast]);
 
   useEffect(() => {
     if (camera.error) {
@@ -1302,12 +1384,14 @@ export default function App() {
       }
       const key = e.key.toLowerCase();
       if ((e.metaKey || e.ctrlKey) && key === 'z') {
+        if (screenModeRef.current) return;
         e.preventDefault();
         if (e.shiftKey) engineRef.current?.redo();
         else engineRef.current?.undo();
         return;
       }
       if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (screenModeRef.current && key !== 'c' && key !== 'm' && e.code !== 'Space') return;
       if (e.code === 'Space') {
         if (target?.closest('button, a, select, summary')) return;
         e.preventDefault();
@@ -1316,6 +1400,7 @@ export default function App() {
           // SPEC §12: Space pauses/resumes while recording.
           if (!e.repeat) keyActionsRef.current.pauseResume();
         } else if (!e.repeat) {
+          if (screenModeRef.current) return;
           // Held spacebar pans with any pointer, like design tools.
           engineRef.current?.setSpacePan(true);
         }
@@ -1416,12 +1501,23 @@ export default function App() {
   const frameCropped = frameCrop.w < stageSize.w || frameCrop.h < stageSize.h;
 
   return (
-    <div className={`app${settings.handedness === 'left' ? ' hand-left' : ''}${focused ? ' is-focused' : ''}${notesOpen ? ' has-notes' : ''}`}>
+    <div className={`app${settings.handedness === 'left' ? ' hand-left' : ''}${focused ? ' is-focused' : ''}${notesOpen ? ' has-notes' : ''}${screenMode ? ' is-screen-studio' : ''}`}>
       <TopBar
+        screenMode={screenMode}
+        screenUnavailable={screenRecordingUnavailable()}
+        modeLocked={recordingActive || probing || screen.busy || !!recorder.take}
+        onScreenMode={() => {
+          screen.release();
+          floating.close();
+          setScreenMode((value) => !value);
+          setTextEdit(null);
+          setFocused(false);
+        }}
+        recordDisabled={screenMode && (!screen.stream || !screenReady || screen.busy)}
         title={title}
         onTitle={setTitle}
         boardsSlot={
-          activeBoardId && (
+          !screenMode && activeBoardId && (
             <BoardsMenu
               boards={boards}
               activeBoardId={activeBoardId}
@@ -1433,13 +1529,14 @@ export default function App() {
           )
         }
         exportSlot={
-          <ExportMenu
+          !screenMode && <ExportMenu
             onExportView={() => void handleExport('view')}
             onExportBoard={() => void handleExport('board')}
           />
         }
         settingsSlot={
           <SettingsMenu
+            screenMode={screenMode}
             handedness={settings.handedness}
             onHandedness={(handedness) => updateSettings({ handedness })}
             presetId={preset.id}
@@ -1455,7 +1552,7 @@ export default function App() {
           />
         }
         onLibrary={activeBoardId ? handleOpenTakes : undefined}
-        onImportFiles={activeBoardId ? handleImportFiles : undefined}
+        onImportFiles={!screenMode && activeBoardId ? handleImportFiles : undefined}
         micEnabled={mic.enabled}
         micMuted={mic.muted}
         onMic={handleMicButton}
@@ -1483,15 +1580,24 @@ export default function App() {
       <main
         className="viewport"
         onDragOver={(e) => {
+          if (screenMode) return;
           if (e.dataTransfer.types.includes('Files')) e.preventDefault();
         }}
         onDrop={(e) => {
+          if (screenMode) return;
           const files = [...e.dataTransfer.files];
           if (files.length === 0) return;
           e.preventDefault();
           handleImportFiles(files);
         }}
       >
+        {screenMode && <ScreenStudioPanel
+          sharing={!!screen.stream} busy={screen.busy} locked={recordingActive || probing}
+          ready={screenReady} sourceName={screen.stream?.getVideoTracks()[0]?.label || 'Shared screen'}
+          sharedAudio={!!screen.stream?.getAudioTracks().length} requestedAudio={requestedScreenAudio}
+          onRequestedAudio={setRequestedScreenAudio} onShare={() => void screen.share(requestedScreenAudio)}
+          onRelease={screen.release} floatingSupported={floating.supported}
+          onFloat={() => void floating.open()} />}
         <div className="stage-fit" ref={fitRef}>
           {/* The scale box's LAYOUT size is the stage's visual size, so flex
               centering never sees an overflowing child. WebKit start-aligns
@@ -1510,6 +1616,7 @@ export default function App() {
                 transform: `scale(${scale})`,
               }}
             >
+            <div className="board-stage-layers" style={{ display: screenMode ? 'none' : undefined }}>
             <StageCanvas
               background={background}
               tool={tool}
@@ -1524,7 +1631,15 @@ export default function App() {
               onTextEdit={handleTextEdit}
               onSelectionChange={handleSelectionChange}
             />
-            {selection && selection.images.length > 0 && selection.bbox && nav &&
+            </div>
+            {screenMode && screen.stream && <ScreenPreview stream={screen.stream}
+              videoRef={screenVideoRef} onReady={setScreenReady} onError={pushToast} />}
+            {screenMode && !screen.stream && <div className="screen-empty">
+              <strong>Make your screen the stage</strong>
+              <span>Share a screen above. Your camera floats over it; no drawing tools, no clutter.</span>
+              <span>Camera and microphone are optional and only enabled when you choose.</span>
+            </div>}
+            {!screenMode && selection && selection.images.length > 0 && selection.bbox && nav &&
               tool === 'select' && (
                 <SelectionActions
                   viewport={nav.viewport}
@@ -1537,7 +1652,7 @@ export default function App() {
                   }
                 />
               )}
-            {textEdit && nav && (
+            {!screenMode && textEdit && nav && (
               <TextEditorOverlay
                 key={textEdit.element?.id ?? `${textEdit.world.x},${textEdit.world.y}`}
                 request={textEdit}
@@ -1552,24 +1667,24 @@ export default function App() {
               <CameraOverlay
                 stream={camera.stream}
                 stage={stageSize}
-                layout={cameraLayout}
-                layoutRef={cameraLayoutRef}
+                layout={activeCameraLayout}
+                layoutRef={activeCameraLayoutRef}
                 scaleRef={scaleRef}
                 videoElRef={videoElRef}
                 recording={recordingActive}
                 cutoutState={cutout.state}
                 cutoutBlocked={cutout.blocked}
                 getCutoutCanvas={getCutoutCanvas}
-                onLayoutChange={setCameraLayout}
+                onLayoutChange={setActiveCameraLayout}
                 onShape={handleShape}
-                onMirror={() => setCameraLayout((l) => ({ ...l, mirrored: !l.mirrored }))}
+                onMirror={() => setActiveCameraLayout((l) => ({ ...l, mirrored: !l.mirrored }))}
                 onDisable={() => {
                   camera.disable();
                   setCameraVisible(true);
                 }}
               />
             )}
-            {frameCropped && (
+            {!screenMode && frameCropped && (
               // SPEC §4.6 "a predictable frame": mark the recorded crop.
               <div className="frame-guide" aria-hidden="true">
                 <div
@@ -1578,7 +1693,7 @@ export default function App() {
                 />
               </div>
             )}
-            {!hasInk && recorder.phase === 'idle' && (
+            {!screenMode && !hasInk && recorder.phase === 'idle' && (
               <div className="empty-hint" aria-hidden="true">
                 Pick up a pen and teach
               </div>
@@ -1590,7 +1705,7 @@ export default function App() {
           </div>
         </div>
 
-        {nav && (
+        {!screenMode && nav && (
           <div className="nav-aids">
             <Minimap
               engine={nav.engine}
@@ -1606,7 +1721,7 @@ export default function App() {
           </div>
         )}
 
-        {nav && activeBoardId && (
+        {!screenMode && nav && activeBoardId && (
           <PageStrip
             getPages={() => pagesRef.current.pages}
             activeIndex={pageInfo.activeIndex}
@@ -1622,7 +1737,7 @@ export default function App() {
           />
         )}
 
-        <Toolbar
+        {!screenMode && <Toolbar
           tool={tool}
           color={color}
           width={width}
@@ -1640,12 +1755,18 @@ export default function App() {
           onRedo={() => engineRef.current?.redo()}
           onClear={() => engineRef.current?.clear()}
           onCollapsed={setCollapsed}
-        />
+        />}
         {notesOpen && (
           <PresenterNotes key={activeBoardId ?? 'local'} value={presenterNotes} onChange={setPresenterNotes}
             onClose={() => setNotesOpen(false)} phase={recorder.phase} />
         )}
       </main>
+      {screenMode && floating.floatingWindow && createPortal(
+        <FloatingRecorder recorder={recorder} onRecord={handleRecord}
+          recordDisabled={!screen.stream || !screenReady || probing || screen.busy}
+          micEnabled={mic.enabled} micMuted={mic.muted} onMic={handleMicButton}
+          cameraEnabled={camera.enabled} cameraVisible={cameraVisible} onCamera={handleCameraButton}
+          pauseReliable={pauseReliable} />, floating.floatingWindow.document.body)}
 
       {recorder.take && (
         <PreviewModal
