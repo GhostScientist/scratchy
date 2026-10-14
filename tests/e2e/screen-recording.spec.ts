@@ -3,6 +3,9 @@ import type { Page } from '@playwright/test';
 
 declare global {
   interface Window {
+    resolveMic(): void;
+    micRequested: boolean;
+    micResult: MediaStream;
     __screenTest: {
       streams: MediaStream[];
       requests: DisplayMediaStreamOptions[];
@@ -409,3 +412,61 @@ test('floating controls render the actual compositor and remain usable away from
   await expect(page.locator('.modal-video')).toBeVisible({ timeout: 15_000 });
   await expect.poll(() => popup.isClosed()).toBe(true);
 });
+
+for (const scenario of [
+  { countdown: 3, during: true },
+  { countdown: 3, during: false },
+  { countdown: 0, during: false },
+]) {
+  test(`pending mic permission resolves ${scenario.during ? 'during' : 'after'} ${scenario.countdown}s countdown`, async ({ page }) => {
+    await seed(page, scenario.countdown, false, true);
+    await page.addInitScript(() => {
+      const original = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+      const state = window;
+      navigator.mediaDevices.getUserMedia = async (constraints) => {
+        if (!constraints?.audio) return original(constraints);
+        state.micRequested = true;
+        await new Promise<void>((resolve) => { state.resolveMic = resolve; });
+        const context = new AudioContext();
+        const oscillator = context.createOscillator();
+        const destination = context.createMediaStreamDestination();
+        oscillator.connect(destination);
+        oscillator.start();
+        state.micResult = destination.stream;
+        return destination.stream;
+      };
+    });
+    await openScreenStudio(page);
+    await share(page);
+    const popupPromise = page.waitForEvent('popup');
+    await page.getByRole('button', { name: 'Floating controls', exact: true }).click();
+    const popup = await popupPromise;
+    await popup.getByRole('button', { name: 'Enable mic', exact: true }).click();
+    await page.waitForFunction(() => window.micRequested);
+    await popup.getByRole('button', { name: 'Record screen', exact: true }).click();
+    if (scenario.countdown) {
+      await expect(popup.getByRole('button', { name: 'Cancel countdown (3)', exact: true })).toBeVisible();
+      await expect(popup.getByRole('button', { name: 'Enable mic', exact: true })).toBeDisabled();
+      await expect(page.getByRole('button', { name: 'Enable microphone (M)', exact: true })).toBeDisabled();
+    }
+    if (!scenario.during) {
+      await expect(popup.getByRole('button', { name: 'Stop recording', exact: true })).toBeVisible();
+    }
+    await page.evaluate(() => window.resolveMic());
+    await page.waitForFunction(() => window.micResult);
+    await expect(popup.getByRole('button', { name: 'Stop recording', exact: true })).toBeVisible();
+    if (scenario.during) {
+      await expect(popup.getByRole('button', { name: 'Mute mic', exact: true })).toBeEnabled();
+      expect(await page.evaluate(() => window.__screenTest.recorded!.getAudioTracks().length)).toBe(1);
+      await popup.getByRole('button', { name: 'Mute mic', exact: true }).click();
+      await expect(popup.getByRole('button', { name: 'Unmute mic', exact: true })).toBeEnabled();
+      expect(await page.evaluate(() => window.micResult.getAudioTracks()[0].enabled)).toBe(false);
+    } else {
+      await expect(popup.getByRole('button', { name: 'Enable mic', exact: true })).toBeDisabled();
+      expect(await page.evaluate(() => window.__screenTest.recorded!.getAudioTracks().length)).toBe(0);
+      expect(await page.evaluate(() => window.micResult.getTracks().every((track: MediaStreamTrack) => track.readyState === 'ended'))).toBe(true);
+    }
+    await page.waitForTimeout(1100);
+    await stop(page);
+  });
+}

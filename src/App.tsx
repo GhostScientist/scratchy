@@ -211,8 +211,6 @@ export default function App() {
   const screenCameraLayoutRef = useRef(screenCameraLayout);
   const activeCameraLayoutRef = screenMode ? screenCameraLayoutRef : cameraLayoutRef;
   const fitRef = useRef<HTMLDivElement>(null);
-  const micStreamRef = useRef<MediaStream | null>(null);
-  micStreamRef.current = mic.stream;
 
   // Snapshot of render state for frame-rate consumers (compositor, autosave).
   const stateRef = useRef({ background, cameraEnabled: camera.enabled, cameraVisible });
@@ -918,7 +916,7 @@ export default function App() {
     [],
   );
 
-  const getMicStream = useCallback(() => micStreamRef.current, []);
+  const getMicStream = mic.snapshotStream;
   const getSharedStream = useCallback(() => screenModeRef.current ? screenStreamRef.current : null, []);
   const getSessionMeta = useCallback(
     () => ({ boardId: boardIdRef.current, title: lessonRef.current.title }),
@@ -1289,8 +1287,8 @@ export default function App() {
 
   const handleMicButton = () => {
     if (!mic.enabled) {
-      if (recorder.phase === 'recording' || recorder.phase === 'paused' || recorder.phase === 'stopping') {
-        pushToast('Enable the microphone before starting a take. This recording has no audio track.');
+      if (recordingActive) {
+        pushToast('Enable the microphone before starting a take. Microphone audio cannot be added after countdown begins.');
         return;
       }
       void mic.enable();
@@ -1558,7 +1556,7 @@ export default function App() {
         onMic={handleMicButton}
         cameraEnabled={camera.enabled}
         cameraVisible={cameraVisible}
-        micLocked={!mic.enabled && recordingActive && recorder.phase !== 'countdown'}
+        micLocked={!mic.enabled && recordingActive}
         onCamera={handleCameraButton}
         phase={recorder.phase}
         elapsedMs={recorder.elapsedMs}

@@ -78,7 +78,7 @@ export function FloatingRecorder({ recorder, onRecord, recordDisabled, micEnable
     }} />
     <div className="screen-setup-actions">
       <button type="button" className="btn ghost" onClick={onMic}
-        disabled={!micEnabled && active}>
+        disabled={!micEnabled && (active || recorder.phase === 'countdown' || recorder.phase === 'stopping')}>
         {!micEnabled ? 'Enable mic' : micMuted ? 'Unmute mic' : active ? 'Mute mic' : 'Turn mic off'}
       </button>
       <button type="button" className="btn ghost" onClick={onCamera}>
