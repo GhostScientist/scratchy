@@ -35,6 +35,11 @@ export function NotesIcon() {
   );
 }
 
+export function ScreenIcon() {
+  return <Svg><rect x="2" y="3" width="20" height="14" rx="2" />
+    <path d="M8 21h8M12 17v4" /><circle cx="18" cy="13" r="2" /></Svg>;
+}
+
 export function HighlighterIcon() {
   return (
     <Svg>

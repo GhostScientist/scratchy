@@ -12,6 +12,7 @@ import {
   UploadIcon,
   NotesIcon,
   FitIcon,
+  ScreenIcon,
 } from './icons';
 
 export function formatDuration(ms: number): string {
@@ -55,6 +56,11 @@ interface TopBarProps {
   onNotes(): void;
   focused: boolean;
   onFocus(): void;
+  screenMode: boolean;
+  onScreenMode(): void;
+  screenUnavailable: string | null;
+  modeLocked: boolean;
+  recordDisabled?: boolean;
 }
 
 export function TopBar(props: TopBarProps) {
@@ -126,6 +132,21 @@ export function TopBar(props: TopBarProps) {
           <input className="mobile-title-input" value={props.title}
             onChange={(e) => props.onTitle(e.target.value)} aria-label="Lesson title"
             spellCheck={false} maxLength={80} />
+          <span className="screen-mode-control" tabIndex={props.screenUnavailable ? 0 : undefined}
+            aria-describedby={props.screenUnavailable ? 'screen-mode-notice' : undefined}>
+            <button type="button" className={`pill${props.screenMode ? ' active' : ''}`}
+              aria-label={props.screenMode ? 'Back to whiteboard' : 'Screen mode'}
+              title={props.screenUnavailable ? undefined : props.screenMode ? 'Back to whiteboard' : 'Screen recording'}
+              aria-pressed={props.screenMode}
+              disabled={props.modeLocked || !!props.screenUnavailable}
+              onClick={props.onScreenMode}>
+              <ScreenIcon />
+              <span>{props.screenMode ? 'Whiteboard' : 'Screen'}</span>
+            </button>
+            {props.screenUnavailable && <span className="screen-mode-notice" id="screen-mode-notice" role="tooltip">
+              {props.screenUnavailable}
+            </span>}
+          </span>
           {props.onImportFiles && (
             <>
               <input
@@ -193,17 +214,18 @@ export function TopBar(props: TopBarProps) {
         <button type="button" className={`pill notes-pill${props.notesOpen ? ' active' : ''}`}
           aria-label="Presenter notes" title="Presenter notes" aria-pressed={props.notesOpen}
           onClick={props.onNotes}><NotesIcon /></button>
-        <button type="button" className={`pill focus-pill${props.focused ? ' active' : ''}`}
+        {!props.screenMode && <button type="button" className={`pill focus-pill${props.focused ? ' active' : ''}`}
           aria-label={props.focused ? 'Exit focus mode' : 'Enter focus mode'}
           title={props.focused ? 'Exit focus mode' : 'Enter focus mode'}
-          aria-pressed={props.focused} onClick={props.onFocus}><FitIcon /></button>
+          aria-pressed={props.focused} onClick={props.onFocus}><FitIcon /></button>}
 
         <div className={`record-cluster${phase === 'paused' ? ' is-paused' : ''}`}>
           {(phase === 'idle' || phase === 'complete') && (
             <button
               type="button"
               className={`record-btn${props.probing ? ' counting' : ''}`}
-              disabled={props.probing}
+              disabled={props.probing || props.recordDisabled}
+              title={props.recordDisabled ? 'Share a screen and wait for its preview before recording' : undefined}
               onClick={props.onRecord}
             >
               {props.probing ? (

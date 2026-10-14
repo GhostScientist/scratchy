@@ -20,6 +20,7 @@ interface SettingsMenuProps {
   onReplayTour(): void;
   countdownSeconds: number;
   onCountdown(seconds: 0 | 3 | 5 | 10): void;
+  screenMode?: boolean;
 }
 
 export function SettingsMenu(props: SettingsMenuProps) {
@@ -49,7 +50,7 @@ export function SettingsMenu(props: SettingsMenuProps) {
       </button>
       {open && (
         <div className="export-flyout settings-flyout" role="menu" aria-label="Settings">
-          <div className="settings-label" id="settings-hand-label">
+          {!props.screenMode && <><div className="settings-label" id="settings-hand-label">
             Toolbar side
           </div>
           <div className="settings-seg" role="group" aria-labelledby="settings-hand-label">
@@ -71,12 +72,12 @@ export function SettingsMenu(props: SettingsMenuProps) {
             >
               Left-handed
             </button>
-          </div>
+          </div></>}
           <div className="settings-label" id="settings-preset-label">
             Recording quality
           </div>
           <div className="settings-seg" role="group" aria-labelledby="settings-preset-label">
-            {PRESETS.map((p) => {
+            {PRESETS.filter((p) => !props.screenMode || p.id !== 'vertical').map((p) => {
               const gatedOff = p.needsPerformance && props.supports1080p === false;
               return (
                 <button

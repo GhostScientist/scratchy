@@ -7,6 +7,7 @@ export interface MicrophoneApi {
   muted: boolean;
   error: string | null;
   enable(): Promise<void>;
+  snapshotStream(): MediaStream | null;
   disable(): void;
   toggleMuted(): void;
   clearError(): void;
@@ -23,6 +24,7 @@ export function useMicrophone(): MicrophoneApi {
   const [muted, setMuted] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const requestRef = useRef(0);
   const meterRef = useRef<{ ctx: AudioContext; raf: number } | null>(null);
 
   const stopMeter = useCallback(() => {
@@ -61,6 +63,7 @@ export function useMicrophone(): MicrophoneApi {
   }, []);
 
   const disable = useCallback(() => {
+    requestRef.current += 1;
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
     setStream(null);
@@ -70,11 +73,16 @@ export function useMicrophone(): MicrophoneApi {
 
   const enable = useCallback(async () => {
     if (streamRef.current) return;
+    const request = ++requestRef.current;
     setError(null);
     try {
       const s = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: true, noiseSuppression: true },
       });
+      if (request !== requestRef.current) {
+        s.getTracks().forEach((track) => track.stop());
+        return;
+      }
       streamRef.current = s;
       s.getAudioTracks()[0]?.addEventListener('ended', () => {
         streamRef.current = null;
@@ -87,7 +95,7 @@ export function useMicrophone(): MicrophoneApi {
       setStream(s);
       startMeter(s);
     } catch (err) {
-      setError(friendlyMediaError(err, 'microphone'));
+      if (request === requestRef.current) setError(friendlyMediaError(err, 'microphone'));
     }
   }, [startMeter, stopMeter]);
 
@@ -103,6 +111,7 @@ export function useMicrophone(): MicrophoneApi {
 
   useEffect(
     () => () => {
+      requestRef.current += 1;
       streamRef.current?.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
       stopMeter();
@@ -116,6 +125,12 @@ export function useMicrophone(): MicrophoneApi {
     muted,
     error,
     enable,
+    // The take freezes its inputs here. Late permission results must not make
+    // the UI promise microphone audio that this take cannot capture.
+    snapshotStream: useCallback(() => {
+      requestRef.current += 1;
+      return streamRef.current;
+    }, []),
     disable,
     toggleMuted,
     clearError: useCallback(() => setError(null), []),

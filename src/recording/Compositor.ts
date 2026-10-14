@@ -8,6 +8,11 @@ import { effectiveView, outputCrop } from './presets';
 import type { OutputCrop, RecordingPreset } from './presets';
 
 export interface CompositorSources {
+  /** Screen mode never renders board content, even before the source is ready. */
+  isScreenCapture?(): boolean;
+  getScreenVideo?(): HTMLVideoElement | null;
+  /** A visible Document PiP window keeps animation running off-tab. */
+  getFrameWindow?(): Window | null;
   getBackground(): BackgroundKind;
   getInkCanvas(): HTMLCanvasElement | null;
   /** Stroke or shape currently being drawn; null between gestures. */
@@ -38,6 +43,8 @@ export class Compositor {
   private track: MediaStreamTrack | null = null;
   private crop: OutputCrop;
   private lastFrame = -Infinity;
+  private frameWindow: Window = window;
+  private fallbackTimer = 0;
 
   constructor(
     private sources: CompositorSources,
@@ -58,11 +65,19 @@ export class Compositor {
     if (this.running) return;
     this.running = true;
     this.frame();
+    if (this.sources.isScreenCapture?.()) {
+      this.fallbackTimer = window.setInterval(() => {
+        if (performance.now() - this.lastFrame < 150) return;
+        this.frameWindow.cancelAnimationFrame(this.raf);
+        this.frame();
+      }, 100);
+    }
   }
 
   stop(): void {
     this.running = false;
-    cancelAnimationFrame(this.raf);
+    this.frameWindow.cancelAnimationFrame(this.raf);
+    window.clearInterval(this.fallbackTimer);
     this.raf = 0;
     this.track = null;
   }
@@ -84,7 +99,9 @@ export class Compositor {
         (this.track as CanvasCaptureMediaStreamTrack).requestFrame();
       }
     }
-    this.raf = requestAnimationFrame(this.frame);
+    this.frameWindow = this.sources.getFrameWindow?.() ?? window;
+    // rAF timestamps in another window have a different time origin.
+    this.raf = this.frameWindow.requestAnimationFrame(() => this.frame(performance.now()));
   };
 
   private draw(): void {
@@ -94,41 +111,48 @@ export class Compositor {
     const view = this.sources.getViewport();
     const eff = effectiveView(view, this.preset, this.stage);
 
-    drawBackground(ctx, this.sources.getBackground(), { ...eff, outW, outH });
+    if (this.sources.isScreenCapture?.()) {
+      ctx.fillStyle = '#101114';
+      ctx.fillRect(0, 0, outW, outH);
+      const screen = this.sources.getScreenVideo?.();
+      if (screen && screen.readyState >= 2 && screen.videoWidth > 0) {
+        const scale = Math.min(outW / screen.videoWidth, outH / screen.videoHeight);
+        const width = screen.videoWidth * scale;
+        const height = screen.videoHeight * scale;
+        ctx.drawImage(screen, (outW - width) / 2, (outH - height) / 2, width, height);
+      }
+    } else {
+      drawBackground(ctx, this.sources.getBackground(), { ...eff, outW, outH });
 
-    // The ink cache always holds the current viewport's view at the display
-    // backing scale, so a source-rect blit of the crop keeps the recording
-    // glued to the viewport. The backing is derived from the canvas itself
-    // (ink.width / stage.w) so the blit stays correct for any DPR-aware
-    // scale. The cache is rebuilt on the engine's rAF, so a frame sampled
-    // mid-pan can be one frame stale relative to the active stroke —
-    // invisible at 30 fps.
-    const ink = this.sources.getInkCanvas();
-    if (ink) {
-      const bs = ink.width / this.stage.w;
-      ctx.drawImage(
-        ink,
-        crop.x * bs,
-        crop.y * bs,
-        crop.w * bs,
-        crop.h * bs,
-        0,
-        0,
-        outW,
-        outH,
-      );
+      // The ink cache holds the current viewport at its display backing
+      // scale, so blitting the crop keeps the recording glued to the view.
+      const ink = this.sources.getInkCanvas();
+      if (ink) {
+        const bs = ink.width / this.stage.w;
+        ctx.drawImage(
+          ink,
+          crop.x * bs,
+          crop.y * bs,
+          crop.w * bs,
+          crop.h * bs,
+          0,
+          0,
+          outW,
+          outH,
+        );
+      }
+
+      const active = this.sources.getActiveElement();
+      if (active) {
+        ctx.save();
+        ctx.setTransform(eff.zoom, 0, 0, eff.zoom, -eff.x * eff.zoom, -eff.y * eff.zoom);
+        drawElement(ctx, active);
+        ctx.restore();
+      }
+
+      const laser = this.sources.getLaserTrail();
+      if (laser.length > 0) drawLaserTrail(ctx, laser, eff, performance.now());
     }
-
-    const active = this.sources.getActiveElement();
-    if (active) {
-      ctx.save();
-      ctx.setTransform(eff.zoom, 0, 0, eff.zoom, -eff.x * eff.zoom, -eff.y * eff.zoom);
-      drawElement(ctx, active);
-      ctx.restore();
-    }
-
-    const laser = this.sources.getLaserTrail();
-    if (laser.length > 0) drawLaserTrail(ctx, laser, eff, performance.now());
 
     const video = this.sources.getVideo();
     if (video && video.readyState >= 2 && video.videoWidth > 0) {
